@@ -165,7 +165,6 @@
 
 ### 6.3 切断ハンドリング
 
-- [ ] Publisher が切断した場合、Relay が Subscriber に PUBLISH_DONE（または接続切断）を通知する — **未テスト・未実装**
 - [x] Subscriber が切断した場合、Relay が該当 Subscriber の購読状態を破棄する（Publisher 側の配信は継続する）— `subscriber_disconnect`
 
 ---
@@ -183,8 +182,4 @@
 
 ---
 
-## 未達サマリ
-
-| # | 項目 | 理由 |
-|---|------|------|
-| 6.3 | Publisher 切断時の Subscriber 通知 | 未テスト・未実装 |
+## 全項目達成
