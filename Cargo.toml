@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "moqt-core",
+    "moqt-relay",
+    "moqt-pub",
+    "moqt-sub",
+]
+resolver = "2"
