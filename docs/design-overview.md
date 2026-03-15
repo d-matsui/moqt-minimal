@@ -114,10 +114,5 @@ moqt-core/src/data/object.rs          → Object fields のテスト
 Publisher / Relay / Subscriber を同一プロセス内で起動し、localhost で接続する。
 
 ```
-tests/
-├── session.rs        → 3. セッション確立（QUIC 接続、SETUP 交換）
-├── subscription.rs   → 4. Namespace 宣言と購読フロー
-├── data_transfer.rs  → 5. データ送信（単一/複数 Object、複数 Group、複数 Track）
-├── relay.rs          → 6. Relay の動作（複数 Subscriber、PUBLISH_DONE、切断）
-└── e2e.rs            → 7. エンドツーエンド（payload 一致、遅延参加）
+moqt-relay/tests/integration.rs  → 3〜7 の結合テスト全て
 ```
