@@ -10,13 +10,13 @@
 
 ## フェーズ 2: moqt-core — message モジュール
 
-- [ ] SETUP + テスト
-- [ ] PUBLISH_NAMESPACE + テスト
-- [ ] REQUEST_OK + テスト
-- [ ] SUBSCRIBE + テスト
-- [ ] SUBSCRIBE_OK + テスト
-- [ ] REQUEST_ERROR + テスト
-- [ ] PUBLISH_DONE + テスト
+- [x] SETUP + テスト
+- [x] PUBLISH_NAMESPACE + テスト
+- [x] REQUEST_OK + テスト
+- [x] SUBSCRIBE + テスト（Message Parameter 含む）
+- [x] SUBSCRIBE_OK + テスト（Message Parameter 含む）
+- [x] REQUEST_ERROR + テスト
+- [x] PUBLISH_DONE + テスト
 
 ## フェーズ 3: moqt-core — data モジュール
 
