@@ -1,46 +1,66 @@
+//! # varint: MOQT 可変長整数 (Variable-Length Integer) のエンコード・デコード
+//!
+//! MOQT では、メッセージ中のほぼ全ての数値フィールドに可変長整数を使う。
+//! 小さい値は少ないバイト数で表現し、大きい値だけ多くのバイトを使うことで、
+//! ワイヤー上のサイズを削減する。
+//!
+//! ## エンコーディング方式（Section 1.4.1）
+//!
+//! 先頭バイトのプレフィックスビットでバイト数が決まる:
+//!
+//! | プレフィックス | バイト数 | 有効ビット | 最大値              |
+//! |----------------|----------|------------|---------------------|
+//! | `0`            | 1        | 7          | 127                 |
+//! | `10`           | 2        | 14         | 16,383              |
+//! | `110`          | 3        | 21         | 2,097,151           |
+//! | `1110`         | 4        | 28         | 268,435,455         |
+//! | `11110`        | 5        | 35         | 34,359,738,367      |
+//! | `111110`       | 6        | 42         | 4,398,046,511,103   |
+//! | `11111110`     | 8        | 56         | 72,057,594,037,927,935 |
+//! | `11111111`     | 9        | 64         | u64::MAX            |
+//!
+//! 注意: `11111100` (0xFC) は無効なコードポイントとして予約されている。
+//! また、7バイトのエンコーディングは存在しない。
+
 use anyhow::{Result, bail, ensure};
 
-/// Encode a u64 value as a MOQT variable-length integer.
-/// Uses the minimum number of bytes required.
+/// u64 値を MOQT 可変長整数としてエンコードし、バッファに追加する。
+/// 常に最小バイト数でエンコードする（minimal encoding）。
 ///
-/// Encoding table (Section 1.4.1):
-///   Leading bits | Bytes | Usable bits | Max value
-///   0            | 1     | 7           | 127
-///   10           | 2     | 14          | 16383
-///   110          | 3     | 21          | 2097151
-///   1110         | 4     | 28          | 268435455
-///   11110        | 5     | 35          | 34359738367
-///   111110       | 6     | 42          | 4398046511103
-///   11111110     | 8     | 56          | 72057594037927935
-///   11111111     | 9     | 64          | u64::MAX
+/// # エンコーディングの仕組み
+/// 先頭バイトの上位ビットがプレフィックスとして機能し、
+/// 後続のバイト数を示す。残りのビットに値を格納する。
+///
+/// 例: 値 37 → `0x25` (1バイト、先頭ビット 0)
+/// 例: 値 15293 → `0xbb 0xbd` (2バイト、先頭ビット 10)
 pub fn encode_varint(value: u64, buf: &mut Vec<u8>) {
     if value <= 0x7f {
-        // 1 byte: 0xxxxxxx
+        // 1バイト: プレフィックス 0 → 7ビット使える
         buf.push(value as u8);
     } else if value <= 0x3fff {
-        // 2 bytes: 10xxxxxx xxxxxxxx
+        // 2バイト: プレフィックス 10 → 14ビット使える
         buf.push(0x80 | (value >> 8) as u8);
         buf.push(value as u8);
     } else if value <= 0x1f_ffff {
-        // 3 bytes: 110xxxxx xxxxxxxx xxxxxxxx
+        // 3バイト: プレフィックス 110 → 21ビット使える
         buf.push(0xc0 | (value >> 16) as u8);
         buf.push((value >> 8) as u8);
         buf.push(value as u8);
     } else if value <= 0x0fff_ffff {
-        // 4 bytes: 1110xxxx xxxxxxxx xxxxxxxx xxxxxxxx
+        // 4バイト: プレフィックス 1110 → 28ビット使える
         buf.push(0xe0 | (value >> 24) as u8);
         buf.push((value >> 16) as u8);
         buf.push((value >> 8) as u8);
         buf.push(value as u8);
     } else if value <= 0x07_ffff_ffff {
-        // 5 bytes: 11110xxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx
+        // 5バイト: プレフィックス 11110 → 35ビット使える
         buf.push(0xf0 | (value >> 32) as u8);
         buf.push((value >> 24) as u8);
         buf.push((value >> 16) as u8);
         buf.push((value >> 8) as u8);
         buf.push(value as u8);
     } else if value <= 0x03ff_ffff_ffff {
-        // 6 bytes: 111110xx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx
+        // 6バイト: プレフィックス 111110 → 42ビット使える
         buf.push(0xf8 | (value >> 40) as u8);
         buf.push((value >> 32) as u8);
         buf.push((value >> 24) as u8);
@@ -48,13 +68,14 @@ pub fn encode_varint(value: u64, buf: &mut Vec<u8>) {
         buf.push((value >> 8) as u8);
         buf.push(value as u8);
     } else if value <= 0x00ff_ffff_ffff_ffff {
-        // 8 bytes: 11111110 xxxxxxxx * 7
+        // 8バイト: プレフィックス 11111110 → 56ビット使える
+        // 注意: 7バイトのエンコーディングは仕様に存在しない
         buf.push(0xfe);
         for i in (0..7).rev() {
             buf.push((value >> (i * 8)) as u8);
         }
     } else {
-        // 9 bytes: 11111111 xxxxxxxx * 8
+        // 9バイト: プレフィックス 11111111 → 64ビット使える（u64 全範囲）
         buf.push(0xff);
         for i in (0..8).rev() {
             buf.push((value >> (i * 8)) as u8);
@@ -62,14 +83,22 @@ pub fn encode_varint(value: u64, buf: &mut Vec<u8>) {
     }
 }
 
-/// Decode a MOQT variable-length integer from the given byte slice.
-/// Advances the slice past the consumed bytes.
+/// バイトスライスから MOQT 可変長整数をデコードする。
+/// スライスの参照を消費したバイト分だけ進める。
+///
+/// # デコードの仕組み
+/// 1. 先頭バイトのプレフィックスビットから必要なバイト数を判定
+/// 2. 必要なバイト数分を読み込み、ビッグエンディアンで結合
+/// 3. プレフィックスビットをマスクで除去して値を取得
+///
+/// 非最小エンコーディング（例: 37 を 2バイトで表現）も受け入れる。
+/// これは仕様で許容されている。
 pub fn decode_varint(buf: &mut &[u8]) -> Result<u64> {
     ensure!(!buf.is_empty(), "empty buffer");
 
     let first = buf[0];
 
-    // Determine length from leading bits
+    // 先頭バイトのプレフィックスビットパターンからバイト長とマスクを決定
     let (len, value_mask) = if first & 0x80 == 0 {
         (1usize, 0x7fu64)
     } else if first & 0xc0 == 0x80 {
@@ -83,21 +112,23 @@ pub fn decode_varint(buf: &mut &[u8]) -> Result<u64> {
     } else if first & 0xfc == 0xf8 {
         (6, 0x03ff_ffff_ffff)
     } else if first == 0xfc {
-        // 11111100 is an invalid code point (Section 1.4.1)
+        // 0xFC (11111100) は仕様で無効と定義されている
         bail!("invalid varint code point 0xFC");
     } else if first == 0xfe {
         (8, 0x00ff_ffff_ffff_ffff)
     } else {
-        // 0xff
+        // 0xff → 9バイト、全64ビット使用
         (9, u64::MAX)
     };
 
     ensure!(buf.len() >= len, "need {len} bytes, have {}", buf.len());
 
+    // バイト列をビッグエンディアンとして u64 に結合
     let mut value = 0u64;
     for &byte in &buf[..len] {
         value = (value << 8) | byte as u64;
     }
+    // プレフィックスビットを除去して純粋な値を取り出す
     value &= value_mask;
 
     *buf = &buf[len..];

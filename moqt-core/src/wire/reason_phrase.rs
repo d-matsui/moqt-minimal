@@ -1,20 +1,35 @@
+//! # reason_phrase: エラー理由などの長さ付き文字列
+//!
+//! REQUEST_ERROR や PUBLISH_DONE メッセージに含まれる、
+//! 人間が読めるエラー理由の文字列。UTF-8 バイト列として表現される。
+//!
+//! ## ワイヤーフォーマット
+//! ```text
+//! [長さ (varint)] [UTF-8 バイト列]
+//! ```
+//! 最大長は 1024 バイト。空文字列（長さ0）も許容される。
+
 use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
+/// Reason Phrase の最大バイト長。過大なデータの受信を防ぐ。
 const MAX_LENGTH: u64 = 1024;
 
-/// Reason Phrase: a length-prefixed UTF-8 string, max 1024 bytes.
+/// 長さ付き UTF-8 文字列。エラー理由や終了理由を表す。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReasonPhrase {
     pub value: Vec<u8>,
 }
 
+/// ReasonPhrase をバイト列にエンコードする。
 pub fn encode_reason_phrase(rp: &ReasonPhrase, buf: &mut Vec<u8>) {
     encode_varint(rp.value.len() as u64, buf);
     buf.extend_from_slice(&rp.value);
 }
 
+/// バイト列から ReasonPhrase をデコードする。
+/// 長さが MAX_LENGTH を超える場合はエラーを返す。
 pub fn decode_reason_phrase(buf: &mut &[u8]) -> Result<ReasonPhrase> {
     let len = decode_varint(buf)?;
     ensure!(

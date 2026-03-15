@@ -1,15 +1,26 @@
+//! # object: サブグループ内のオブジェクト
+//!
+//! サブグループストリーム上で、SubgroupHeader の後に続くオブジェクトデータ。
+//! 各オブジェクトはヘッダー（Object ID Delta + Payload Length）とペイロードで構成される。
+//!
+//! ## Object ID のデルタエンコーディング
+//! Object ID は直接エンコードされず、前のオブジェクトとの差分（デルタ）で表現される。
+//! - 最初のオブジェクト: Object ID = delta
+//! - 2番目以降: Object ID = 前の Object ID + delta + 1
+//!
+//! 連番（0, 1, 2, ...）の場合、全てのオブジェクトで delta = 0 となり効率的。
+//! デルタが 0 より大きい場合、間のオブジェクトは別のサブグループにあるか存在しない。
+
 use anyhow::Result;
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// Object fields within a Subgroup stream.
-///
-/// Object ID = previous Object ID + delta + 1 (for non-first objects).
-/// For the first object in a subgroup: Object ID = delta.
-/// Consecutive IDs (0, 1, 2, ...) have delta = 0 for all objects.
+/// オブジェクトヘッダー。ペイロードの前に書き込まれる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectHeader {
+    /// 前のオブジェクトとの Object ID 差分。連番なら常に 0。
     pub object_id_delta: u64,
+    /// 後続するペイロードのバイト数。受信側はこの値で読み取り量を確定できる。
     pub payload_length: u64,
 }
 
@@ -29,9 +40,10 @@ impl ObjectHeader {
     }
 }
 
-/// Compute the absolute Object ID from the delta.
-/// - first object in subgroup: `object_id = delta`
-/// - subsequent objects: `object_id = prev_object_id + delta + 1`
+/// デルタから絶対 Object ID を計算する。
+/// - 最初のオブジェクト（prev_object_id = None）: Object ID = delta
+/// - 2番目以降: Object ID = prev_object_id + delta + 1
+///   （+1 は「連番の場合 delta=0 で済む」ようにするため）
 pub fn resolve_object_id(prev_object_id: Option<u64>, delta: u64) -> u64 {
     match prev_object_id {
         None => delta,

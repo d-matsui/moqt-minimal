@@ -1,17 +1,23 @@
+//! # request_ok: REQUEST_OK メッセージ
+//!
+//! PUBLISH_NAMESPACE などのリクエストに対する成功応答。
+//! 最小実装ではパラメータを含まない。
+
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_OK, decode_message_header, encode_message_frame};
 use crate::wire::varint::{decode_varint, encode_varint};
 
+/// REQUEST_OK メッセージ。リクエストの成功を示す。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestOkMessage {
-    // Parameters omitted in minimal implementation (count = 0)
+    // Parameters: 最小実装では省略（count = 0）
 }
 
 impl RequestOkMessage {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         let mut payload = Vec::new();
-        encode_varint(0, &mut payload); // Number of Parameters = 0
+        encode_varint(0, &mut payload); // パラメータ数 = 0
         encode_message_frame(MSG_REQUEST_OK, &payload, buf);
     }
 

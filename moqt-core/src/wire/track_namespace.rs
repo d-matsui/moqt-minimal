@@ -1,15 +1,33 @@
+//! # track_namespace: MOQT トラック名前空間
+//!
+//! トラック名前空間は、パブリッシャーが配信するメディアストリームを識別するための
+//! 階層的な名前構造。0〜32個のフィールド（各フィールドは1バイト以上のバイト列）で構成される。
+//!
+//! 例: `["example", "live"]` のような2フィールドの名前空間で、
+//! パブリッシャーの配信先を一意に特定できる。
+//!
+//! ## ワイヤーフォーマット
+//! ```text
+//! [フィールド数 (varint)] [フィールド1の長さ (varint)] [フィールド1のデータ] ...
+//! ```
+
 use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
-/// Track Namespace: an ordered set of 0-32 fields, each at least 1 byte.
+/// トラック名前空間: 0〜32個のバイト列フィールドの順序付きリスト。
+/// Hash トレイトを実装しているので、HashMap のキーとして使える。
+/// これはリレーサーバーでパブリッシャーの検索に利用される。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrackNamespace {
     pub fields: Vec<Vec<u8>>,
 }
 
+/// 仕様上のフィールド数の上限。DoS 攻撃防止のために制限している。
 const MAX_FIELDS: u64 = 32;
 
+/// トラック名前空間をバイト列にエンコードする。
+/// フォーマット: [フィールド数] [各フィールドの長さ + データ]...
 pub fn encode_track_namespace(ns: &TrackNamespace, buf: &mut Vec<u8>) {
     encode_varint(ns.fields.len() as u64, buf);
     for field in &ns.fields {
@@ -18,6 +36,8 @@ pub fn encode_track_namespace(ns: &TrackNamespace, buf: &mut Vec<u8>) {
     }
 }
 
+/// バイト列からトラック名前空間をデコードする。
+/// フィールド数が上限を超えたり、フィールド長が0の場合はエラーを返す。
 pub fn decode_track_namespace(buf: &mut &[u8]) -> Result<TrackNamespace> {
     let num_fields = decode_varint(buf)?;
     ensure!(
@@ -28,6 +48,7 @@ pub fn decode_track_namespace(buf: &mut &[u8]) -> Result<TrackNamespace> {
     let mut fields = Vec::with_capacity(num_fields as usize);
     for _ in 0..num_fields {
         let field_len = decode_varint(buf)?;
+        // 仕様により各フィールドは最低1バイト必要
         ensure!(field_len > 0, "namespace field length must be at least 1");
         let field_len = field_len as usize;
         ensure!(

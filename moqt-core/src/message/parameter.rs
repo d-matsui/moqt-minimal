@@ -1,8 +1,18 @@
+//! # parameter: SUBSCRIBE 等のメッセージに付加されるパラメータ
+//!
+//! SUBSCRIBE や SUBSCRIBE_OK メッセージには、購読の振る舞いを制御する
+//! パラメータを付加できる。key_value_pair と同様にデルタエンコーディングを使う。
+//!
+//! ## 最小実装でサポートするパラメータ
+//! - `SUBSCRIPTION_FILTER` (0x21): 購読開始位置のフィルタ（例: 次のグループ先頭から）
+//! - `LARGEST_OBJECT` (0x09): パブリッシャーが持つ最大オブジェクト位置
+//! - `FORWARD` (0x10): 転送方向の指定
+
 use anyhow::{Result, bail, ensure};
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
-// Parameter Type IDs
+// パラメータタイプ ID（仕様で定義されたもの）
 pub const PARAM_DELIVERY_TIMEOUT: u64 = 0x02;
 pub const PARAM_AUTHORIZATION_TOKEN: u64 = 0x03;
 pub const PARAM_EXPIRES: u64 = 0x08;
@@ -12,23 +22,31 @@ pub const PARAM_SUBSCRIBER_PRIORITY: u64 = 0x20;
 pub const PARAM_SUBSCRIPTION_FILTER: u64 = 0x21;
 pub const PARAM_GROUP_ORDER: u64 = 0x22;
 
-/// Known message parameters for the minimal implementation.
+/// 最小実装で扱うメッセージパラメータ。
+/// 未知のパラメータは現状エラーにしている（将来的には無視する実装に変更可能）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageParameter {
-    /// SUBSCRIPTION_FILTER (0x21): length-prefixed, contains Filter Type.
+    /// SUBSCRIPTION_FILTER (0x21): 購読フィルタ。
+    /// サブスクライバーが「どこからデータを受け取りたいか」を指定する。
     SubscriptionFilter(SubscriptionFilter),
-    /// LARGEST_OBJECT (0x9): Location (Group vi64, Object vi64).
+    /// LARGEST_OBJECT (0x09): パブリッシャーが持つ最新のオブジェクト位置。
+    /// (Group ID, Object ID) のペアで表現される。
     LargestObject { group: u64, object: u64 },
-    /// FORWARD (0x10): uint8, 0 or 1.
+    /// FORWARD (0x10): 転送方向（0 または 1）。
     Forward(u8),
 }
 
+/// 購読フィルタの種類。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscriptionFilter {
+    /// 次のグループの先頭から受信開始する。
+    /// ライブ配信で最も一般的なフィルタ。
     NextGroupStart, // 0x1
 }
 
-/// Encode message parameters. Parameters must be in ascending Type order.
+/// メッセージパラメータのリストをエンコードする。
+/// パラメータは Type の昇順で並んでいる必要がある。
+/// フォーマット: [パラメータ数 (varint)] [各パラメータのデルタType + 値]...
 pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) {
     encode_varint(params.len() as u64, buf);
     let mut prev_type: u64 = 0;
@@ -38,7 +56,7 @@ pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) {
         encode_varint(delta, buf);
         match param {
             MessageParameter::SubscriptionFilter(filter) => {
-                // length-prefixed
+                // 長さ付きの内部データ（フィルタタイプを varint でエンコード）
                 let mut inner = Vec::new();
                 match filter {
                     SubscriptionFilter::NextGroupStart => encode_varint(0x1, &mut inner),
@@ -47,12 +65,12 @@ pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) {
                 buf.extend_from_slice(&inner);
             }
             MessageParameter::LargestObject { group, object } => {
-                // Location: two consecutive varints
+                // Location: Group ID と Object ID の2つの varint を連続して書く
                 encode_varint(*group, buf);
                 encode_varint(*object, buf);
             }
             MessageParameter::Forward(v) => {
-                // uint8
+                // 単純な 1 バイト値
                 buf.push(*v);
             }
         }
@@ -60,7 +78,7 @@ pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) {
     }
 }
 
-/// Decode message parameters. Returns the count prefix + parsed parameters.
+/// メッセージパラメータのリストをデコードする。
 pub fn decode_parameters(buf: &mut &[u8]) -> Result<Vec<MessageParameter>> {
     let count = decode_varint(buf)?;
     let mut params = Vec::with_capacity(count as usize);
@@ -72,6 +90,7 @@ pub fn decode_parameters(buf: &mut &[u8]) -> Result<Vec<MessageParameter>> {
             .ok_or_else(|| anyhow::anyhow!("parameter type overflow"))?;
         let param = match type_id {
             PARAM_SUBSCRIPTION_FILTER => {
+                // 長さ付きの内部データを読んでフィルタタイプを取得
                 let len = decode_varint(buf)? as usize;
                 ensure!(buf.len() >= len, "subscription filter truncated");
                 let mut inner = &buf[..len];
@@ -105,6 +124,7 @@ pub fn decode_parameters(buf: &mut &[u8]) -> Result<Vec<MessageParameter>> {
     Ok(params)
 }
 
+/// パラメータの種類から Type ID を取得する。
 fn param_type_id(param: &MessageParameter) -> u64 {
     match param {
         MessageParameter::LargestObject { .. } => PARAM_LARGEST_OBJECT,

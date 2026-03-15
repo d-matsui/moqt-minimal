@@ -1,13 +1,26 @@
+//! # request_error: REQUEST_ERROR メッセージ
+//!
+//! SUBSCRIBE 等のリクエストに対するエラー応答。
+//! エラーコード、リトライ間隔、人間が読めるエラー理由を含む。
+//!
+//! ## 主なエラーコード
+//! - `0x00`: INTERNAL_ERROR（内部エラー）
+//! - `0x10`: DOES_NOT_EXIST（対象が存在しない）
+
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_ERROR, decode_message_header, encode_message_frame};
 use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
+/// REQUEST_ERROR メッセージ。リクエストの失敗を示す。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestErrorMessage {
+    /// エラーコード（仕様定義の値）。
     pub error_code: u64,
+    /// リトライ可能な場合のリトライ間隔。0 はリトライ不可を示す。
     pub retry_interval: u64,
+    /// 人間が読めるエラー理由（デバッグ用）。
     pub reason_phrase: ReasonPhrase,
 }
 

@@ -1,18 +1,35 @@
+//! # subgroup_header: サブグループヘッダー
+//!
+//! QUIC 単方向ストリームの先頭に書き込まれるヘッダー。
+//! どのトラック（Track Alias）のどのグループ（Group ID）のデータかを示す。
+//!
+//! ## Subgroup Header Type (0x38) のビットフィールド
+//! ```text
+//! ビット 0   (PROPERTIES):       0 — プロパティなし
+//! ビット 1-2 (SUBGROUP_ID_MODE): 00 — Subgroup ID = 0（省略）
+//! ビット 3   (END_OF_GROUP):     1 — このストリームでグループが完結する
+//! ビット 4   (固定):             1 — Subgroup Header であることを示す
+//! ビット 5   (DEFAULT_PRIORITY): 1 — デフォルト優先度を使用
+//! ```
+//! → 0b00111000 = 0x38
+//!
+//! 最小実装では、1つの Group = 1つの Subgroup = 1つの QUIC ストリーム。
+
 use anyhow::{Result, ensure};
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// Subgroup Header Type for minimal implementation: 0x38
-/// - bit 0 (PROPERTIES): 0
-/// - bit 1-2 (SUBGROUP_ID_MODE): 00 (Subgroup ID = 0, omitted)
-/// - bit 3 (END_OF_GROUP): 1
-/// - bit 4: 1 (fixed, identifies Subgroup Header)
-/// - bit 5 (DEFAULT_PRIORITY): 1
+/// 最小実装で使用する Subgroup Header Type。
+/// ビットフィールドの意味は上記モジュールドキュメント参照。
 const SUBGROUP_TYPE: u64 = 0x38;
 
+/// サブグループヘッダー。QUIC 単方向ストリームの先頭に書き込まれる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubgroupHeader {
+    /// SUBSCRIBE_OK で割り当てられたトラックエイリアス。
+    /// フルのトラック名前空間を毎回送る代わりに、短い数値で識別する。
     pub track_alias: u64,
+    /// このストリームが含むグループの ID。連番で増加する。
     pub group_id: u64,
 }
 

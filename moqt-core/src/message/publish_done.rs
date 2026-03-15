@@ -1,13 +1,26 @@
+//! # publish_done: PUBLISH_DONE メッセージ
+//!
+//! パブリッシャーがトラックの配信を終了したことを通知するメッセージ。
+//! リレーはこのメッセージを受け取ると、関連するサブスクライバーに転送する。
+//!
+//! ## 主なステータスコード
+//! - `0x0`: INTERNAL_ERROR（内部エラーによる終了）
+//! - `0x2`: TRACK_ENDED（正常終了）
+
 use anyhow::{Result, ensure};
 
 use super::{MSG_PUBLISH_DONE, decode_message_header, encode_message_frame};
 use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
+/// PUBLISH_DONE メッセージ。配信終了を通知する。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishDoneMessage {
+    /// 終了理由を示すステータスコード。
     pub status_code: u64,
+    /// 配信中に送信したストリーム（サブグループ）の総数。
     pub stream_count: u64,
+    /// 人間が読める終了理由（デバッグ用）。
     pub reason_phrase: ReasonPhrase,
 }
 

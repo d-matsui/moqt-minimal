@@ -1,28 +1,47 @@
+//! # key_value_pair: SETUP メッセージ等で使われるキー・バリューペア
+//!
+//! MOQT の SETUP メッセージでは、接続オプション（PATH, AUTHORITY 等）を
+//! キー・バリューペアのリストとして送信する。
+//!
+//! ## デルタエンコーディング
+//! ペアは Type の昇順で並べる必要があり、各ペアの Type は
+//! 前のペアの Type との差分（デルタ）としてエンコードされる。
+//! これにより、ワイヤー上のサイズを節約できる。
+//!
+//! ## 値の型の決定方法
+//! Type ID が偶数なら値は varint、奇数なら長さ付きバイト列。
+//! これにより、新しいパラメータ型を追加しても後方互換性を保てる。
+
 use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
+/// バリュー部の最大バイト長（奇数 Type の場合）。DoS 攻撃防止用。
 const MAX_VALUE_LENGTH: u64 = (1 << 16) - 1; // 2^16 - 1 = 65535
 
-/// A decoded Key-Value-Pair with the absolute Type (not delta).
+/// デコード済みのキー・バリューペア。Type は絶対値（デルタではない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyValuePair {
     pub type_id: u64,
     pub value: KvValue,
 }
 
+/// キー・バリューペアの値。Type ID の偶奇で型が決まる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KvValue {
-    /// Even type: value is a varint.
+    /// 偶数 Type: 値は varint 整数
     Varint(u64),
-    /// Odd type: value is a byte sequence.
+    /// 奇数 Type: 値は長さ付きバイト列
     Bytes(Vec<u8>),
 }
 
-/// Encode a sequence of Key-Value-Pairs. Types must be in ascending order.
+/// キー・バリューペアのリストをエンコードする。
+/// ペアは Type の昇順で並んでいる必要がある。
+/// 各ペアの Type はデルタ（前のペアとの差分）としてエンコードされる。
 pub fn encode_key_value_pairs(pairs: &[KeyValuePair], buf: &mut Vec<u8>) {
     let mut prev_type: u64 = 0;
     for pair in pairs {
+        // デルタエンコーディング: 前の Type との差分を書き込む
         let delta = pair.type_id - prev_type;
         encode_varint(delta, buf);
         match &pair.value {
@@ -36,22 +55,25 @@ pub fn encode_key_value_pairs(pairs: &[KeyValuePair], buf: &mut Vec<u8>) {
     }
 }
 
-/// Decode Key-Value-Pairs from the buffer until it is empty.
+/// バッファが空になるまでキー・バリューペアをデコードする。
+/// デルタを累積して絶対 Type ID を復元する。
 pub fn decode_key_value_pairs(buf: &mut &[u8]) -> Result<Vec<KeyValuePair>> {
     let mut pairs = Vec::new();
     let mut prev_type: u64 = 0;
 
     while !buf.is_empty() {
         let delta = decode_varint(buf)?;
+        // デルタを累積して絶対 Type ID を復元。オーバーフローを検出する。
         let type_id = prev_type
             .checked_add(delta)
             .ok_or_else(|| anyhow::anyhow!("type overflow"))?;
 
+        // Type ID の偶奇で値の解釈方法が異なる
         let value = if type_id % 2 == 0 {
-            // Even type: varint value
+            // 偶数 Type: varint 値
             KvValue::Varint(decode_varint(buf)?)
         } else {
-            // Odd type: length-prefixed bytes
+            // 奇数 Type: 長さ付きバイト列
             let len = decode_varint(buf)?;
             ensure!(
                 len <= MAX_VALUE_LENGTH,
