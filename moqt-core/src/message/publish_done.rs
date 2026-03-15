@@ -1,7 +1,7 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::{decode_message_header, encode_message_frame, MSG_PUBLISH_DONE};
-use crate::wire::reason_phrase::{decode_reason_phrase, encode_reason_phrase, ReasonPhrase};
+use super::{MSG_PUBLISH_DONE, decode_message_header, encode_message_frame};
+use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,14 +20,12 @@ impl PublishDoneMessage {
         encode_message_frame(MSG_PUBLISH_DONE, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_PUBLISH_DONE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected PUBLISH_DONE (0x{MSG_PUBLISH_DONE:X}), got 0x{msg_type:X}"),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_PUBLISH_DONE,
+            "expected PUBLISH_DONE (0x{MSG_PUBLISH_DONE:X}), got 0x{msg_type:X}"
+        );
         let mut p = payload.as_slice();
         let status_code = decode_varint(&mut p)?;
         let stream_count = decode_varint(&mut p)?;

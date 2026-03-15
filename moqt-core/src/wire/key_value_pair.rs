@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
@@ -37,7 +37,7 @@ pub fn encode_key_value_pairs(pairs: &[KeyValuePair], buf: &mut Vec<u8>) {
 }
 
 /// Decode Key-Value-Pairs from the buffer until it is empty.
-pub fn decode_key_value_pairs(buf: &mut &[u8]) -> io::Result<Vec<KeyValuePair>> {
+pub fn decode_key_value_pairs(buf: &mut &[u8]) -> Result<Vec<KeyValuePair>> {
     let mut pairs = Vec::new();
     let mut prev_type: u64 = 0;
 
@@ -45,7 +45,7 @@ pub fn decode_key_value_pairs(buf: &mut &[u8]) -> io::Result<Vec<KeyValuePair>> 
         let delta = decode_varint(buf)?;
         let type_id = prev_type
             .checked_add(delta)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "type overflow"))?;
+            .ok_or_else(|| anyhow::anyhow!("type overflow"))?;
 
         let value = if type_id % 2 == 0 {
             // Even type: varint value
@@ -53,19 +53,16 @@ pub fn decode_key_value_pairs(buf: &mut &[u8]) -> io::Result<Vec<KeyValuePair>> 
         } else {
             // Odd type: length-prefixed bytes
             let len = decode_varint(buf)?;
-            if len > MAX_VALUE_LENGTH {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("value too long: {len} bytes (max {MAX_VALUE_LENGTH})"),
-                ));
-            }
+            ensure!(
+                len <= MAX_VALUE_LENGTH,
+                "value too long: {len} bytes (max {MAX_VALUE_LENGTH})"
+            );
             let len = len as usize;
-            if buf.len() < len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!("need {len} bytes for value, have {}", buf.len()),
-                ));
-            }
+            ensure!(
+                buf.len() >= len,
+                "need {len} bytes for value, have {}",
+                buf.len()
+            );
             let bytes = buf[..len].to_vec();
             *buf = &buf[len..];
             KvValue::Bytes(bytes)

@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::{Result, bail, ensure};
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -61,7 +61,7 @@ pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) {
 }
 
 /// Decode message parameters. Returns the count prefix + parsed parameters.
-pub fn decode_parameters(buf: &mut &[u8]) -> io::Result<Vec<MessageParameter>> {
+pub fn decode_parameters(buf: &mut &[u8]) -> Result<Vec<MessageParameter>> {
     let count = decode_varint(buf)?;
     let mut params = Vec::with_capacity(count as usize);
     let mut prev_type: u64 = 0;
@@ -69,26 +69,18 @@ pub fn decode_parameters(buf: &mut &[u8]) -> io::Result<Vec<MessageParameter>> {
         let delta = decode_varint(buf)?;
         let type_id = prev_type
             .checked_add(delta)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "parameter type overflow"))?;
+            .ok_or_else(|| anyhow::anyhow!("parameter type overflow"))?;
         let param = match type_id {
             PARAM_SUBSCRIPTION_FILTER => {
                 let len = decode_varint(buf)? as usize;
-                if buf.len() < len {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "subscription filter truncated",
-                    ));
-                }
+                ensure!(buf.len() >= len, "subscription filter truncated");
                 let mut inner = &buf[..len];
                 let filter_type = decode_varint(&mut inner)?;
                 *buf = &buf[len..];
                 match filter_type {
                     0x1 => MessageParameter::SubscriptionFilter(SubscriptionFilter::NextGroupStart),
                     _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("unsupported filter type: 0x{filter_type:X}"),
-                        ));
+                        bail!("unsupported filter type: 0x{filter_type:X}");
                     }
                 }
             }
@@ -98,21 +90,13 @@ pub fn decode_parameters(buf: &mut &[u8]) -> io::Result<Vec<MessageParameter>> {
                 MessageParameter::LargestObject { group, object }
             }
             PARAM_FORWARD => {
-                if buf.is_empty() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "forward parameter truncated",
-                    ));
-                }
+                ensure!(!buf.is_empty(), "forward parameter truncated");
                 let v = buf[0];
                 *buf = &buf[1..];
                 MessageParameter::Forward(v)
             }
             _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unknown parameter type: 0x{type_id:X}"),
-                ));
+                bail!("unknown parameter type: 0x{type_id:X}");
             }
         };
         params.push(param);

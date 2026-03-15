@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::io;
 use std::sync::Arc;
+
+use anyhow::{Result, bail};
 
 use quinn::{Connection, Endpoint};
 use tokio::sync::Mutex;
@@ -63,7 +64,7 @@ impl Relay {
         }
     }
 
-    pub async fn run(&self) -> io::Result<()> {
+    pub async fn run(&self) -> Result<()> {
         while let Some(incoming) = self.endpoint.accept().await {
             let state = self.state.clone();
             tokio::spawn(async move {
@@ -76,11 +77,8 @@ impl Relay {
     }
 }
 
-async fn handle_connection(
-    incoming: quinn::Incoming,
-    state: Arc<Mutex<RelayState>>,
-) -> io::Result<()> {
-    let connection = incoming.await.map_err(io::Error::other)?;
+async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayState>>) -> Result<()> {
+    let connection = incoming.await?;
 
     let session_id = {
         let mut s = state.lock().await;
@@ -96,18 +94,15 @@ async fn handle_connection(
     };
 
     // SETUP exchange
-    let mut our_ctrl_send = connection.open_uni().await.map_err(io::Error::other)?;
+    let mut our_ctrl_send = connection.open_uni().await?;
     let server_setup = SetupMessage {
         setup_options: vec![],
     };
     let mut setup_buf = Vec::new();
     server_setup.encode(&mut setup_buf);
-    our_ctrl_send
-        .write_all(&setup_buf)
-        .await
-        .map_err(io::Error::other)?;
+    our_ctrl_send.write_all(&setup_buf).await?;
 
-    let peer_ctrl_recv = connection.accept_uni().await.map_err(io::Error::other)?;
+    let peer_ctrl_recv = connection.accept_uni().await?;
     let mut ctrl_reader = ControlStreamReader::new(peer_ctrl_recv);
     let _peer_setup = ctrl_reader.read_setup().await?;
 
@@ -127,7 +122,7 @@ async fn handle_connection(
                     }
                     Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
                     Err(quinn::ConnectionError::LocallyClosed) => break,
-                    Err(e) => return Err(io::Error::other(e)),
+                    Err(e) => return Err(e.into()),
                 }
             }
             uni = connection.accept_uni() => {
@@ -143,7 +138,7 @@ async fn handle_connection(
                     }
                     Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
                     Err(quinn::ConnectionError::LocallyClosed) => break,
-                    Err(e) => return Err(io::Error::other(e)),
+                    Err(e) => return Err(e.into()),
                 }
             }
         }
@@ -163,26 +158,23 @@ async fn handle_connection(
 }
 
 /// Read exactly `n` bytes from a RecvStream.
-async fn read_exact(recv: &mut quinn::RecvStream, n: usize) -> io::Result<Vec<u8>> {
+async fn read_exact(recv: &mut quinn::RecvStream, n: usize) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; n];
     let mut filled = 0;
     while filled < n {
         match recv.read(&mut buf[filled..]).await {
             Ok(Some(read)) => filled += read,
             Ok(None) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!("stream ended after {filled}/{n} bytes"),
-                ))
+                bail!("stream ended after {filled}/{n} bytes");
             }
-            Err(e) => return Err(io::Error::other(e)),
+            Err(e) => return Err(e.into()),
         }
     }
     Ok(buf)
 }
 
 /// Read a varint from a RecvStream. Returns (value, raw_bytes).
-async fn read_varint_from_stream(recv: &mut quinn::RecvStream) -> io::Result<(u64, Vec<u8>)> {
+async fn read_varint_from_stream(recv: &mut quinn::RecvStream) -> Result<(u64, Vec<u8>)> {
     let first = read_exact(recv, 1).await?;
     let byte = first[0];
     let total_len = if byte & 0x80 == 0 {
@@ -198,10 +190,7 @@ async fn read_varint_from_stream(recv: &mut quinn::RecvStream) -> io::Result<(u6
     } else if byte & 0xfc == 0xf8 {
         6
     } else if byte == 0xfc {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid varint code point 0xFC",
-        ));
+        bail!("invalid varint code point 0xFC");
     } else if byte == 0xfe {
         8
     } else {
@@ -226,7 +215,7 @@ async fn handle_incoming_uni(
     sender_session: SessionId,
     mut recv: quinn::RecvStream,
     state: Arc<Mutex<RelayState>>,
-) -> io::Result<()> {
+) -> Result<()> {
     // Read SUBGROUP_HEADER: Type (varint) + Track Alias (varint) + Group ID (varint)
     let (stream_type, type_bytes) = read_varint_from_stream(&mut recv).await?;
     let (track_alias, alias_bytes) = read_varint_from_stream(&mut recv).await?;
@@ -234,10 +223,7 @@ async fn handle_incoming_uni(
 
     // Verify it's a valid subgroup header type (bit 4 set)
     if stream_type & 0x10 == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("expected SUBGROUP_HEADER, got type 0x{stream_type:X}"),
-        ));
+        bail!("expected SUBGROUP_HEADER, got type 0x{stream_type:X}");
     }
 
     // Find all subscribers and open downstream streams
@@ -292,12 +278,7 @@ async fn handle_incoming_uni(
         .collect();
 
     for stream in &subscriber_streams {
-        stream
-            .lock()
-            .await
-            .write_all(&header_bytes)
-            .await
-            .map_err(io::Error::other)?;
+        stream.lock().await.write_all(&header_bytes).await?;
     }
 
     // Stream objects one by one
@@ -306,8 +287,15 @@ async fn handle_incoming_uni(
         let delta_result = read_varint_from_stream(&mut recv).await;
         let (_delta, delta_bytes) = match delta_result {
             Ok(v) => v,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break, // stream FIN
-            Err(e) => return Err(e),
+            Err(e) => {
+                // Stream FIN or read error — treat as end of stream
+                let is_eof = e.downcast_ref::<quinn::ReadExactError>().is_some()
+                    || e.to_string().contains("stream ended");
+                if is_eof {
+                    break;
+                }
+                return Err(e);
+            }
         };
 
         // Read Payload Length (varint)
@@ -340,7 +328,7 @@ async fn handle_bidi_stream(
     recv: quinn::RecvStream,
     state: Arc<Mutex<RelayState>>,
     connection: Connection,
-) -> io::Result<()> {
+) -> Result<()> {
     let mut reader = ControlStreamReader::new(recv);
     let msg_bytes = reader.read_message_bytes().await?;
     let mut slice = msg_bytes.as_slice();
@@ -359,17 +347,14 @@ async fn handle_bidi_stream(
             let ok = RequestOkMessage {};
             let mut buf = Vec::new();
             ok.encode(&mut buf);
-            send.write_all(&buf).await.map_err(io::Error::other)?;
+            send.write_all(&buf).await?;
         }
         MSG_SUBSCRIBE => {
             let msg = SubscribeMessage::decode(&mut slice)?;
             handle_subscribe(session_id, msg, send, state, connection).await?;
         }
         _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected message type on bidi stream: 0x{msg_type:X}"),
-            ));
+            bail!("unexpected message type on bidi stream: 0x{msg_type:X}");
         }
     }
 
@@ -382,7 +367,7 @@ async fn handle_subscribe(
     subscriber_send: quinn::SendStream,
     state: Arc<Mutex<RelayState>>,
     _subscriber_conn: Connection,
-) -> io::Result<()> {
+) -> Result<()> {
     let subscriber_send = Arc::new(Mutex::new(subscriber_send));
 
     // Find publisher for this namespace
@@ -410,9 +395,7 @@ async fn handle_subscribe(
                 let conn = s
                     .sessions
                     .get(&id)
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::NotFound, "publisher session gone")
-                    })?
+                    .ok_or_else(|| anyhow::anyhow!("publisher session gone"))?
                     .connection
                     .clone();
                 (id, conn)
@@ -427,19 +410,14 @@ async fn handle_subscribe(
                 };
                 let mut buf = Vec::new();
                 err.encode(&mut buf);
-                subscriber_send
-                    .lock()
-                    .await
-                    .write_all(&buf)
-                    .await
-                    .map_err(io::Error::other)?;
+                subscriber_send.lock().await.write_all(&buf).await?;
                 return Ok(());
             }
         }
     };
 
     // Forward SUBSCRIBE to publisher
-    let (mut pub_send, pub_recv) = publisher_conn.open_bi().await.map_err(io::Error::other)?;
+    let (mut pub_send, pub_recv) = publisher_conn.open_bi().await?;
 
     let relay_request_id = {
         let mut s = state.lock().await;
@@ -454,7 +432,7 @@ async fn handle_subscribe(
     };
     let mut buf = Vec::new();
     upstream_subscribe.encode(&mut buf);
-    pub_send.write_all(&buf).await.map_err(io::Error::other)?;
+    pub_send.write_all(&buf).await?;
 
     // Read SUBSCRIBE_OK from publisher
     let mut pub_reader = ControlStreamReader::new(pub_recv);
@@ -481,12 +459,7 @@ async fn handle_subscribe(
     // Forward SUBSCRIBE_OK to subscriber
     let mut ok_buf = Vec::new();
     subscribe_ok.encode(&mut ok_buf);
-    subscriber_send
-        .lock()
-        .await
-        .write_all(&ok_buf)
-        .await
-        .map_err(io::Error::other)?;
+    subscriber_send.lock().await.write_all(&ok_buf).await?;
 
     // Wait for PUBLISH_DONE from publisher, forward to all subscribers
     let done_bytes = pub_reader.read_message_bytes().await?;

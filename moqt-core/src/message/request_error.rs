@@ -1,7 +1,7 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::{decode_message_header, encode_message_frame, MSG_REQUEST_ERROR};
-use crate::wire::reason_phrase::{decode_reason_phrase, encode_reason_phrase, ReasonPhrase};
+use super::{MSG_REQUEST_ERROR, decode_message_header, encode_message_frame};
+use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,14 +20,12 @@ impl RequestErrorMessage {
         encode_message_frame(MSG_REQUEST_ERROR, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_REQUEST_ERROR {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected REQUEST_ERROR (0x{MSG_REQUEST_ERROR:X}), got 0x{msg_type:X}"),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_REQUEST_ERROR,
+            "expected REQUEST_ERROR (0x{MSG_REQUEST_ERROR:X}), got 0x{msg_type:X}"
+        );
         let mut p = payload.as_slice();
         let error_code = decode_varint(&mut p)?;
         let retry_interval = decode_varint(&mut p)?;

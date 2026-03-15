@@ -1,8 +1,8 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::{decode_message_header, encode_message_frame, MSG_PUBLISH_NAMESPACE};
+use super::{MSG_PUBLISH_NAMESPACE, decode_message_header, encode_message_frame};
 use crate::wire::track_namespace::{
-    decode_track_namespace, encode_track_namespace, TrackNamespace,
+    TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -24,27 +24,21 @@ impl PublishNamespaceMessage {
         encode_message_frame(MSG_PUBLISH_NAMESPACE, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_PUBLISH_NAMESPACE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "expected PUBLISH_NAMESPACE (0x{MSG_PUBLISH_NAMESPACE:X}), got 0x{msg_type:X}"
-                ),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_PUBLISH_NAMESPACE,
+            "expected PUBLISH_NAMESPACE (0x{MSG_PUBLISH_NAMESPACE:X}), got 0x{msg_type:X}"
+        );
         let mut p = payload.as_slice();
         let request_id = decode_varint(&mut p)?;
         let required_request_id_delta = decode_varint(&mut p)?;
         let track_namespace = decode_track_namespace(&mut p)?;
         let num_params = decode_varint(&mut p)?;
-        if num_params != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "parameters not supported in minimal implementation",
-            ));
-        }
+        ensure!(
+            num_params == 0,
+            "parameters not supported in minimal implementation"
+        );
         Ok(PublishNamespaceMessage {
             request_id,
             required_request_id_delta,

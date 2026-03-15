@@ -14,7 +14,7 @@ use moqt_core::wire::reason_phrase::ReasonPhrase;
 use moqt_core::wire::track_namespace::TrackNamespace;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
@@ -163,10 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Read H.264 Annex B byte stream from stdin, split into NAL units,
 /// and send as MOQT Objects in real-time. IDR frames start a new Group.
-async fn send_from_stdin(
-    conn: quinn::Connection,
-    _track_name: &str,
-) -> Result<u64, Box<dyn std::error::Error>> {
+async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::Result<u64> {
     let (nal_tx, mut nal_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
     // Blocking reader: read stdin, detect NAL unit boundaries, send each NAL unit

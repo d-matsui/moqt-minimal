@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
@@ -15,21 +15,18 @@ pub fn encode_reason_phrase(rp: &ReasonPhrase, buf: &mut Vec<u8>) {
     buf.extend_from_slice(&rp.value);
 }
 
-pub fn decode_reason_phrase(buf: &mut &[u8]) -> io::Result<ReasonPhrase> {
+pub fn decode_reason_phrase(buf: &mut &[u8]) -> Result<ReasonPhrase> {
     let len = decode_varint(buf)?;
-    if len > MAX_LENGTH {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("reason phrase too long: {len} bytes (max {MAX_LENGTH})"),
-        ));
-    }
+    ensure!(
+        len <= MAX_LENGTH,
+        "reason phrase too long: {len} bytes (max {MAX_LENGTH})"
+    );
     let len = len as usize;
-    if buf.len() < len {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!("need {len} bytes for reason phrase, have {}", buf.len()),
-        ));
-    }
+    ensure!(
+        buf.len() >= len,
+        "need {len} bytes for reason phrase, have {}",
+        buf.len()
+    );
     let value = buf[..len].to_vec();
     *buf = &buf[len..];
     Ok(ReasonPhrase { value })

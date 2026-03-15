@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::{Result, bail, ensure};
 
 /// Encode a u64 value as a MOQT variable-length integer.
 /// Uses the minimum number of bytes required.
@@ -64,10 +64,8 @@ pub fn encode_varint(value: u64, buf: &mut Vec<u8>) {
 
 /// Decode a MOQT variable-length integer from the given byte slice.
 /// Advances the slice past the consumed bytes.
-pub fn decode_varint(buf: &mut &[u8]) -> io::Result<u64> {
-    if buf.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty buffer"));
-    }
+pub fn decode_varint(buf: &mut &[u8]) -> Result<u64> {
+    ensure!(!buf.is_empty(), "empty buffer");
 
     let first = buf[0];
 
@@ -86,10 +84,7 @@ pub fn decode_varint(buf: &mut &[u8]) -> io::Result<u64> {
         (6, 0x03ff_ffff_ffff)
     } else if first == 0xfc {
         // 11111100 is an invalid code point (Section 1.4.1)
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid varint code point 0xFC",
-        ));
+        bail!("invalid varint code point 0xFC");
     } else if first == 0xfe {
         (8, 0x00ff_ffff_ffff_ffff)
     } else {
@@ -97,12 +92,7 @@ pub fn decode_varint(buf: &mut &[u8]) -> io::Result<u64> {
         (9, u64::MAX)
     };
 
-    if buf.len() < len {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!("need {len} bytes, have {}", buf.len()),
-        ));
-    }
+    ensure!(buf.len() >= len, "need {len} bytes, have {}", buf.len());
 
     let mut value = 0u64;
     for &byte in &buf[..len] {

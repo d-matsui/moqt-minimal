@@ -1,8 +1,8 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::{decode_message_header, encode_message_frame, MSG_SETUP};
+use super::{MSG_SETUP, decode_message_header, encode_message_frame};
 use crate::wire::key_value_pair::{
-    decode_key_value_pairs, encode_key_value_pairs, KeyValuePair, KvValue,
+    KeyValuePair, KvValue, decode_key_value_pairs, encode_key_value_pairs,
 };
 
 const OPTION_PATH: u64 = 0x01;
@@ -46,14 +46,12 @@ impl SetupMessage {
         encode_message_frame(MSG_SETUP, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_SETUP {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected SETUP (0x{MSG_SETUP:X}), got 0x{msg_type:X}"),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_SETUP,
+            "expected SETUP (0x{MSG_SETUP:X}), got 0x{msg_type:X}"
+        );
 
         let mut payload_slice = payload.as_slice();
         let kvs = decode_key_value_pairs(&mut payload_slice)?;

@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::net::SocketAddr;
 
-use moqt_core::data::object::{resolve_object_id, ObjectHeader};
+use moqt_core::data::object::{ObjectHeader, resolve_object_id};
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::publish_done::PublishDoneMessage;
@@ -12,7 +12,7 @@ use moqt_core::session::control_stream::ControlStreamReader;
 use moqt_core::wire::track_namespace::TrackNamespace;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");

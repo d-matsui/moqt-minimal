@@ -1,9 +1,9 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::parameter::{decode_parameters, encode_parameters, MessageParameter};
-use super::{decode_message_header, encode_message_frame, MSG_SUBSCRIBE};
+use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
+use super::{MSG_SUBSCRIBE, decode_message_header, encode_message_frame};
 use crate::wire::track_namespace::{
-    decode_track_namespace, encode_track_namespace, TrackNamespace,
+    TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -28,25 +28,18 @@ impl SubscribeMessage {
         encode_message_frame(MSG_SUBSCRIBE, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_SUBSCRIBE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected SUBSCRIBE (0x{MSG_SUBSCRIBE:X}), got 0x{msg_type:X}"),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_SUBSCRIBE,
+            "expected SUBSCRIBE (0x{MSG_SUBSCRIBE:X}), got 0x{msg_type:X}"
+        );
         let mut p = payload.as_slice();
         let request_id = decode_varint(&mut p)?;
         let required_request_id_delta = decode_varint(&mut p)?;
         let track_namespace = decode_track_namespace(&mut p)?;
         let name_len = decode_varint(&mut p)? as usize;
-        if p.len() < name_len {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "track name truncated",
-            ));
-        }
+        ensure!(p.len() >= name_len, "track name truncated");
         let track_name = p[..name_len].to_vec();
         p = &p[name_len..];
         let parameters = decode_parameters(&mut p)?;

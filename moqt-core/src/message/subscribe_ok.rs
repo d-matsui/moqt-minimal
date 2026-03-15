@@ -1,7 +1,7 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::parameter::{decode_parameters, encode_parameters, MessageParameter};
-use super::{decode_message_header, encode_message_frame, MSG_SUBSCRIBE_OK};
+use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
+use super::{MSG_SUBSCRIBE_OK, decode_message_header, encode_message_frame};
 use crate::wire::varint::{decode_varint, encode_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,25 +21,18 @@ impl SubscribeOkMessage {
         encode_message_frame(MSG_SUBSCRIBE_OK, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_SUBSCRIBE_OK {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected SUBSCRIBE_OK (0x{MSG_SUBSCRIBE_OK:X}), got 0x{msg_type:X}"),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_SUBSCRIBE_OK,
+            "expected SUBSCRIBE_OK (0x{MSG_SUBSCRIBE_OK:X}), got 0x{msg_type:X}"
+        );
         let mut p = payload.as_slice();
         let track_alias = decode_varint(&mut p)?;
         let parameters = decode_parameters(&mut p)?;
         // Track Properties: skip (read length, skip bytes)
         let props_len = decode_varint(&mut p)? as usize;
-        if p.len() < props_len {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "track properties truncated",
-            ));
-        }
+        ensure!(p.len() >= props_len, "track properties truncated");
         // Skip properties content
         let _ = &p[..props_len];
         Ok(SubscribeOkMessage {

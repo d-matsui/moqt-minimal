@@ -7,7 +7,7 @@ pub mod setup;
 pub mod subscribe;
 pub mod subscribe_ok;
 
-use std::io;
+use anyhow::{Result, ensure};
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -30,22 +30,16 @@ pub fn encode_message_frame(msg_type: u64, payload: &[u8], buf: &mut Vec<u8>) {
 
 /// Decode a control message frame header: returns (message_type, payload_bytes).
 /// The caller is responsible for reading exactly `payload.len()` bytes.
-pub fn decode_message_header(buf: &mut &[u8]) -> io::Result<(u64, Vec<u8>)> {
+pub fn decode_message_header(buf: &mut &[u8]) -> Result<(u64, Vec<u8>)> {
     let msg_type = decode_varint(buf)?;
-    if buf.len() < 2 {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "need 2 bytes for message length",
-        ));
-    }
+    ensure!(buf.len() >= 2, "need 2 bytes for message length");
     let len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
     *buf = &buf[2..];
-    if buf.len() < len {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!("need {len} bytes for message payload, have {}", buf.len()),
-        ));
-    }
+    ensure!(
+        buf.len() >= len,
+        "need {len} bytes for message payload, have {}",
+        buf.len()
+    );
     let payload = buf[..len].to_vec();
     *buf = &buf[len..];
     Ok((msg_type, payload))

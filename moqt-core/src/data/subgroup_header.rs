@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::{Result, ensure};
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -23,14 +23,12 @@ impl SubgroupHeader {
         encode_varint(self.group_id, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let stream_type = decode_varint(buf)?;
-        if stream_type != SUBGROUP_TYPE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected SUBGROUP_HEADER type 0x{SUBGROUP_TYPE:X}, got 0x{stream_type:X}"),
-            ));
-        }
+        ensure!(
+            stream_type == SUBGROUP_TYPE,
+            "expected SUBGROUP_HEADER type 0x{SUBGROUP_TYPE:X}, got 0x{stream_type:X}"
+        );
         let track_alias = decode_varint(buf)?;
         let group_id = decode_varint(buf)?;
         Ok(SubgroupHeader {

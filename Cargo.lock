@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "anyhow"
+version = "1.0.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+
+[[package]]
 name = "aws-lc-rs"
 version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -285,6 +291,7 @@ dependencies = [
 name = "moqt-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "quinn",
  "rustls",
  "rustls-pki-types",
@@ -295,6 +302,7 @@ dependencies = [
 name = "moqt-pub"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "moqt-core",
  "quinn",
  "rcgen",
@@ -307,6 +315,7 @@ dependencies = [
 name = "moqt-relay"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "moqt-core",
  "quinn",
  "rcgen",
@@ -319,6 +328,7 @@ dependencies = [
 name = "moqt-sub"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "moqt-core",
  "quinn",
  "rcgen",

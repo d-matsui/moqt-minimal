@@ -1,6 +1,6 @@
-use std::io;
+use anyhow::{Result, ensure};
 
-use super::{decode_message_header, encode_message_frame, MSG_REQUEST_OK};
+use super::{MSG_REQUEST_OK, decode_message_header, encode_message_frame};
 use crate::wire::varint::{decode_varint, encode_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,22 +15,18 @@ impl RequestOkMessage {
         encode_message_frame(MSG_REQUEST_OK, &payload, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let (msg_type, payload) = decode_message_header(buf)?;
-        if msg_type != MSG_REQUEST_OK {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("expected REQUEST_OK (0x{MSG_REQUEST_OK:X}), got 0x{msg_type:X}"),
-            ));
-        }
+        ensure!(
+            msg_type == MSG_REQUEST_OK,
+            "expected REQUEST_OK (0x{MSG_REQUEST_OK:X}), got 0x{msg_type:X}"
+        );
         let mut p = payload.as_slice();
         let num_params = decode_varint(&mut p)?;
-        if num_params != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "parameters not supported in minimal implementation",
-            ));
-        }
+        ensure!(
+            num_params == 0,
+            "parameters not supported in minimal implementation"
+        );
         Ok(RequestOkMessage {})
     }
 }

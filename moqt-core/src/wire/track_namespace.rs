@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
@@ -18,34 +18,23 @@ pub fn encode_track_namespace(ns: &TrackNamespace, buf: &mut Vec<u8>) {
     }
 }
 
-pub fn decode_track_namespace(buf: &mut &[u8]) -> io::Result<TrackNamespace> {
+pub fn decode_track_namespace(buf: &mut &[u8]) -> Result<TrackNamespace> {
     let num_fields = decode_varint(buf)?;
-    if num_fields > MAX_FIELDS {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("too many namespace fields: {num_fields} (max {MAX_FIELDS})"),
-        ));
-    }
+    ensure!(
+        num_fields <= MAX_FIELDS,
+        "too many namespace fields: {num_fields} (max {MAX_FIELDS})"
+    );
 
     let mut fields = Vec::with_capacity(num_fields as usize);
     for _ in 0..num_fields {
         let field_len = decode_varint(buf)?;
-        if field_len == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "namespace field length must be at least 1",
-            ));
-        }
+        ensure!(field_len > 0, "namespace field length must be at least 1");
         let field_len = field_len as usize;
-        if buf.len() < field_len {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!(
-                    "need {field_len} bytes for namespace field, have {}",
-                    buf.len()
-                ),
-            ));
-        }
+        ensure!(
+            buf.len() >= field_len,
+            "need {field_len} bytes for namespace field, have {}",
+            buf.len()
+        );
         fields.push(buf[..field_len].to_vec());
         *buf = &buf[field_len..];
     }

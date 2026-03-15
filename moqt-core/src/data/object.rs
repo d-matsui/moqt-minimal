@@ -1,4 +1,4 @@
-use std::io;
+use anyhow::Result;
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -19,7 +19,7 @@ impl ObjectHeader {
         encode_varint(self.payload_length, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> io::Result<Self> {
+    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
         let object_id_delta = decode_varint(buf)?;
         let payload_length = decode_varint(buf)?;
         Ok(ObjectHeader {
