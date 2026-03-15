@@ -127,9 +127,10 @@ SUBSCRIBE Message {
 
 #### 最小実装の Parameters
 
-- SUBSCRIPTION_FILTER (0x21): NextGroupStart (0x1) のみ対応
+- SUBSCRIPTION_FILTER (0x21): length-prefixed。NextGroupStart (0x1) のみ対応
+  - ワイヤフォーマット: Parameter Type Delta (vi64) + Length (vi64) + Filter Type (vi64)
+  - NextGroupStart の Filter Type = 0x1。optional fields なし
   - ライブ配信で次の Group（= キーフレーム境界）から受信開始する
-  - LatestObject (0x2) は Group 途中から始まりキーフレームなしになりうるため不採用
 - FORWARD (0x10): 1（省略時のデフォルト）
 - その他は省略
 
@@ -155,7 +156,7 @@ SUBSCRIBE_OK Message {
 
 - Track Alias: Object 送信時に Track を識別する数値。セッション内で一意
 - Parameters:
-  - LARGEST_OBJECT (0x9): 既に Object がある場合はその Location を返す
+  - LARGEST_OBJECT (0x9): Location 型（Group vi64 + Object vi64）。既に Object がある場合はその Location を返す
 - Track Properties: 最小実装では空（長さ0）
 
 ### 3.4 PUBLISH_NAMESPACE (0x6) — 必須
@@ -199,14 +200,14 @@ REQUEST_ERROR Message {
   Type (vi64) = 0x5,
   Length (16),
   Error Code (vi64),
-  Retry Interval (vi64),     // 0 = リトライ不可
+  Retry Interval (vi64),     // 最小リトライ待ち時間(ms) + 1。0 = リトライ不可、1 = 即時リトライ可
   Error Reason (Reason Phrase),
 }
 ```
 
 最小実装のエラーコード:
-- INTERNAL_ERROR (0x0)
-- DOES_NOT_EXIST (該当トラックなし)
+- INTERNAL_ERROR (0x0): 汎用エラー
+- DOES_NOT_EXIST (0x10): 該当トラック/namespaceなし
 
 ### 3.7 PUBLISH_DONE (0xB) — 必須
 
@@ -245,23 +246,13 @@ SUBGROUP_HEADER {
 }
 ```
 
-最小実装の Type 値: `0x30`
+最小実装の Type 値: `0x38` (`0b00111000`)
+
 - bit 0 (PROPERTIES): 0 — Object Properties なし
-- bit 1-2 (SUBGROUP_ID_MODE): 0b00 — Subgroup ID 省略（= 0）
-- bit 3 (END_OF_GROUP): 1 — この subgroup が Group の最後の Object を含む
-  - ※ 1 Group = 1 Subgroup なので常にセット
+- bit 1-2 (SUBGROUP_ID_MODE): 00 — Subgroup ID 省略（= 0）
+- bit 3 (END_OF_GROUP): 1 — この subgroup が Group の最後の Object を含む（1 Group = 1 Subgroup なので常にセット）
+- bit 4: 1（固定、Subgroup Header の識別）
 - bit 5 (DEFAULT_PRIORITY): 1 — Priority 省略（デフォルト使用）
-
-よって: `0b00110000` = `0x38`
-
-訂正: bit を整理する。
-- bit 0 = PROPERTIES = 0
-- bit 1-2 = SUBGROUP_ID_MODE = 00
-- bit 3 = END_OF_GROUP = 1
-- bit 4 = 1（固定、Subgroup Header の識別）
-- bit 5 = DEFAULT_PRIORITY = 1
-
-`0b00111000` = `0x38`
 
 最小実装の SUBGROUP_HEADER:
 ```
@@ -280,7 +271,7 @@ SUBGROUP_HEADER {
 
 ```
 {
-  Object ID Delta (vi64),     // 前の Object ID との差分。最初の Object では Object ID そのもの
+  Object ID Delta (vi64),     // Object ID = 前の Object ID + Delta + 1。最初の Object では Object ID = Delta。連続 ID (0,1,2,...) なら全 Delta = 0
   Object Payload Length (vi64),
   Object Payload (..),
 }
@@ -311,8 +302,8 @@ SUBGROUP_HEADER {
 | 110       | 3       | 21        | 2097151 |
 | 1110      | 4       | 28        | 268435455 |
 
-最小実装では 4 バイトまで対応すれば十分（Group ID, Object ID 等が 2^28 を超えることはまずない）。
-完全準拠する場合は 9 バイトまで対応する。
+7バイト形式は存在しない（6バイトの次は8バイト）。`0xFC` (11111100) は無効コードポイント。
+本実装では 9 バイトまで完全対応済み。
 
 ### 5.2 Track Namespace
 
@@ -344,6 +335,10 @@ Key-Value-Pair {
   Value (..)
 }
 ```
+
+注意: Key-Value-Pair は Setup Options (Section 9.4) 用。Message Parameter (Section 9.3) は
+別のエンコーディング（Type Delta + パラメータ定義ごとの Value 形式: uint8, varint, Location, length-prefixed）。
+最小実装では必要な Message Parameter のみ個別に実装する。
 
 ## 6. Relay の動作
 
@@ -388,10 +383,10 @@ Key-Value-Pair {
 Relay の内部状態:
 
 Sessions:
-  session_id → { connection, role (publisher|subscriber), control_stream }
+  session_id → { connection, control_stream }
 
-Tracks:
-  (namespace, name) → { publisher_session_id }
+Namespace Publishers (PUBLISH_NAMESPACE で登録):
+  namespace → { session_id }
 
 Subscriptions:
   downstream_sub → {

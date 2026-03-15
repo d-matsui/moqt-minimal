@@ -11,7 +11,8 @@ moqt-core/src/
 │   ├── mod.rs
 │   ├── varint.rs          # Variable-Length Integer (vi64)
 │   ├── track_namespace.rs # Track Namespace のエンコード/デコード
-│   └── reason_phrase.rs   # Reason Phrase のエンコード/デコード
+│   ├── reason_phrase.rs   # Reason Phrase のエンコード/デコード
+│   └── key_value_pair.rs  # Key-Value-Pair (Setup Options 用)
 ├── message/               # 制御メッセージの定義とシリアライズ/パース
 │   ├── mod.rs
 │   ├── setup.rs           # SETUP
