@@ -7,5 +7,6 @@ edition = "2021"
 moqt-core = { path = "../moqt-core" }
 quinn = "0.11"
 rustls = { version = "0.23", features = ["ring"] }
+rustls-pki-types = "1"
 rcgen = "0.13"
 tokio = { version = "1", features = ["full"] }

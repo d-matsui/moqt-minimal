@@ -12,6 +12,7 @@ use moqt_core::message::request_error::RequestErrorMessage;
 use moqt_core::message::setup::SetupMessage;
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
+use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::{MSG_PUBLISH_NAMESPACE, MSG_SUBSCRIBE};
 use moqt_core::session::control_stream::ControlStreamReader;
 use moqt_core::session::request_id::RequestIdAllocator;
@@ -303,7 +304,7 @@ async fn handle_subscribe(
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    // Now handle Object stream forwarding and PUBLISH_DONE in background
+    // Handle Object stream forwarding in background
     let state_clone = state.clone();
     let track_alias = subscribe_ok.track_alias;
     tokio::spawn(async move {
@@ -316,6 +317,15 @@ async fn handle_subscribe(
             eprintln!("object forwarding error: {e}");
         }
     });
+
+    // Wait for PUBLISH_DONE from publisher on the bidi stream, then forward to subscriber
+    let done_bytes = pub_reader.read_message_bytes().await?;
+    let mut done_slice = done_bytes.as_slice();
+    let _publish_done = PublishDoneMessage::decode(&mut done_slice)?;
+    subscriber_send
+        .write_all(&done_bytes)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     Ok(())
 }

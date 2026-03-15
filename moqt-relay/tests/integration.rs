@@ -14,6 +14,7 @@ fn init_crypto() {
 }
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
+use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::request_ok::RequestOkMessage;
 use moqt_core::message::setup::{SetupMessage, SetupOption};
@@ -353,4 +354,101 @@ async fn object_forwarding() {
     assert_eq!(obj1.payload_length, 5);
     let payload1 = &data_slice[..5];
     assert_eq!(payload1, b"world");
+}
+
+/// 6.2: PUBLISH_DONE forwarding through Relay
+#[tokio::test]
+async fn publish_done_forwarding() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move {
+        relay.run().await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher setup
+    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    publish_namespace(
+        &pub_conn,
+        TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+    )
+    .await;
+
+    // Publisher: accept SUBSCRIBE, respond, send object, then PUBLISH_DONE
+    let pub_conn2 = pub_conn.clone();
+    tokio::spawn(async move {
+        let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let mut reader = ControlStreamReader::new(recv);
+        let sub_bytes = reader.read_message_bytes().await.unwrap();
+        let mut slice = sub_bytes.as_slice();
+        let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
+
+        let ok = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+        };
+        let mut buf = Vec::new();
+        ok.encode(&mut buf);
+        send.write_all(&buf).await.unwrap();
+
+        // Send one object
+        let mut uni = pub_conn2.open_uni().await.unwrap();
+        let header = SubgroupHeader {
+            track_alias: 1,
+            group_id: 0,
+        };
+        let mut data = Vec::new();
+        header.encode(&mut data);
+        let obj = ObjectHeader {
+            object_id_delta: 0,
+            payload_length: 4,
+        };
+        obj.encode(&mut data);
+        data.extend_from_slice(b"done");
+        uni.write_all(&data).await.unwrap();
+        uni.finish().unwrap();
+
+        // Send PUBLISH_DONE on the bidi stream
+        let done = PublishDoneMessage {
+            status_code: 0x2, // TRACK_ENDED
+            stream_count: 1,
+            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+        };
+        let mut done_buf = Vec::new();
+        done.encode(&mut done_buf);
+        send.write_all(&done_buf).await.unwrap();
+    });
+
+    // Subscriber setup
+    let sub_conn = connect_client(addr, cert_der).await;
+    let (mut sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
+    let subscribe = SubscribeMessage {
+        request_id: 0,
+        required_request_id_delta: 0,
+        track_namespace: TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+        track_name: b"video".to_vec(),
+        parameters: vec![],
+    };
+    let mut buf = Vec::new();
+    subscribe.encode(&mut buf);
+    sub_send.write_all(&buf).await.unwrap();
+
+    // Read SUBSCRIBE_OK
+    let mut sub_reader = ControlStreamReader::new(sub_recv);
+    let ok_bytes = sub_reader.read_message_bytes().await.unwrap();
+    let mut slice = ok_bytes.as_slice();
+    let _subscribe_ok = SubscribeOkMessage::decode(&mut slice).unwrap();
+
+    // Read PUBLISH_DONE (forwarded by relay)
+    let done_bytes = sub_reader.read_message_bytes().await.unwrap();
+    let mut done_slice = done_bytes.as_slice();
+    let publish_done = PublishDoneMessage::decode(&mut done_slice).unwrap();
+    assert_eq!(publish_done.status_code, 0x2); // TRACK_ENDED
+    assert_eq!(publish_done.stream_count, 1);
 }

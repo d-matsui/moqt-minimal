@@ -34,15 +34,15 @@
 - [x] PUBLISH_NAMESPACE 受信 → namespace 登録
 - [x] SUBSCRIBE 中継（downstream → upstream）
 - [x] Object stream 転送（upstream → downstream）
-- [ ] PUBLISH_DONE 転送
-- [x] 結合テスト（session, subscription, object forwarding）
+- [x] PUBLISH_DONE 転送
+- [x] 結合テスト（session, subscription, object forwarding, publish_done）
 
 ## フェーズ 6: moqt-pub / moqt-sub
 
-- [ ] moqt-pub: 接続 → PUBLISH_NAMESPACE → SUBSCRIBE 応答 → Object 送信
-- [ ] moqt-sub: 接続 → SUBSCRIBE → Object 受信
+- [x] moqt-pub: 接続 → PUBLISH_NAMESPACE → SUBSCRIBE 応答 → Object 送信
+- [x] moqt-sub: 接続 → SUBSCRIBE → Object 受信
 - [ ] 結合テスト（data_transfer, relay, e2e）
 
 ## 現在のフェーズ
 
-**フェーズ 1** — 未着手
+**フェーズ 6** — moqt-pub / moqt-sub 実装済み、E2E テスト残り
