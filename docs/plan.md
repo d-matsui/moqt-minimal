@@ -30,12 +30,12 @@
 
 ## フェーズ 5: moqt-relay
 
-- [ ] QUIC server 起動 + SETUP 交換
-- [ ] PUBLISH_NAMESPACE 受信 → namespace 登録
-- [ ] SUBSCRIBE 中継（downstream → upstream）
-- [ ] Object stream 転送（upstream → downstream）
+- [x] QUIC server 起動 + SETUP 交換
+- [x] PUBLISH_NAMESPACE 受信 → namespace 登録
+- [x] SUBSCRIBE 中継（downstream → upstream）
+- [x] Object stream 転送（upstream → downstream）
 - [ ] PUBLISH_DONE 転送
-- [ ] 結合テスト（session, subscription）
+- [x] 結合テスト（session, subscription, object forwarding）
 
 ## フェーズ 6: moqt-pub / moqt-sub
 
