@@ -105,6 +105,9 @@ async fn main() -> anyhow::Result<()> {
     let conn = connection.clone();
     let receive_handle = tokio::spawn(async move {
         let stdout = std::io::stdout();
+        let mut ivf_header_written = false;
+        let mut frame_index: u64 = 0;
+
         loop {
             match conn.accept_uni().await {
                 Ok(mut uni_recv) => {
@@ -129,14 +132,38 @@ async fn main() -> anyhow::Result<()> {
                     match SubgroupHeader::decode(&mut data) {
                         Ok(header) => {
                             if pipe_mode {
-                                // Pipe mode: write raw payloads to stdout
+                                // Pipe mode: write IVF container to stdout
+                                let mut out = stdout.lock();
+
+                                // Write IVF file header once
+                                if !ivf_header_written {
+                                    let mut ivf_hdr = [0u8; 32];
+                                    ivf_hdr[0..4].copy_from_slice(b"DKIF"); // signature
+                                    ivf_hdr[4..6].copy_from_slice(&0u16.to_le_bytes()); // version
+                                    ivf_hdr[6..8].copy_from_slice(&32u16.to_le_bytes()); // header length
+                                    ivf_hdr[8..12].copy_from_slice(b"VP80"); // codec FourCC
+                                    ivf_hdr[12..14].copy_from_slice(&320u16.to_le_bytes()); // width
+                                    ivf_hdr[14..16].copy_from_slice(&240u16.to_le_bytes()); // height
+                                    ivf_hdr[16..20].copy_from_slice(&30u32.to_le_bytes()); // framerate num
+                                    ivf_hdr[20..24].copy_from_slice(&1u32.to_le_bytes()); // framerate den
+                                    // bytes 24-31: frame count + unused (leave as 0)
+                                    let _ = out.write_all(&ivf_hdr);
+                                    ivf_header_written = true;
+                                }
+
+                                // Write each Object as an IVF frame
                                 while !data.is_empty() {
                                     if let Ok(obj) = ObjectHeader::decode(&mut data) {
                                         let payload = &data[..obj.payload_length as usize];
                                         data = &data[obj.payload_length as usize..];
-                                        let mut out = stdout.lock();
+
+                                        // IVF frame header: size (4) + timestamp (8)
+                                        let size = payload.len() as u32;
+                                        let _ = out.write_all(&size.to_le_bytes());
+                                        let _ = out.write_all(&frame_index.to_le_bytes());
                                         let _ = out.write_all(payload);
                                         let _ = out.flush();
+                                        frame_index += 1;
                                     } else {
                                         break;
                                     }
@@ -153,10 +180,7 @@ async fn main() -> anyhow::Result<()> {
                                     let id = resolve_object_id(prev_id, obj.object_id_delta);
                                     let payload = &data[..obj.payload_length as usize];
                                     data = &data[obj.payload_length as usize..];
-                                    eprintln!(
-                                        "    Object {id}: {}",
-                                        String::from_utf8_lossy(payload)
-                                    );
+                                    eprintln!("    Object {id}: {} bytes", payload.len());
                                     prev_id = Some(id);
                                 }
                             }

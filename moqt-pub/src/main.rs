@@ -161,42 +161,60 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Read H.264 Annex B byte stream from stdin, split into NAL units,
-/// and send as MOQT Objects in real-time. IDR frames start a new Group.
-async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::Result<u64> {
-    let (nal_tx, mut nal_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+/// IVF frame with keyframe flag.
+struct IvfFrame {
+    data: Vec<u8>,
+    is_keyframe: bool,
+}
 
-    // Blocking reader: read stdin, detect NAL unit boundaries, send each NAL unit
+/// Read VP8 frames in IVF container from stdin and send as MOQT Objects.
+/// Keyframes start a new Group.
+async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::Result<u64> {
+    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<IvfFrame>(64);
+
+    // Blocking reader: parse IVF container from stdin
     tokio::task::spawn_blocking(move || {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
-        let mut buf = [0u8; 4096];
-        let mut accum = Vec::new();
 
-        loop {
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => n,
-                Err(e) => {
-                    eprintln!("stdin read error: {e}");
-                    break;
-                }
-            };
-            accum.extend_from_slice(&buf[..n]);
-
-            // Extract complete NAL units from accum
-            while let Some(end) = find_start_code(&accum, 1) {
-                let nal = accum[..end].to_vec();
-                accum = accum[end..].to_vec();
-                if nal_tx.blocking_send(nal).is_err() {
-                    return;
-                }
-            }
+        // Skip IVF file header (32 bytes)
+        let mut file_header = [0u8; 32];
+        if reader.read_exact(&mut file_header).is_err() {
+            eprintln!("failed to read IVF file header");
+            return;
         }
 
-        // Send remaining data as last NAL
-        if !accum.is_empty() {
-            let _ = nal_tx.blocking_send(accum);
+        // Read frames
+        loop {
+            // IVF frame header: 12 bytes
+            //   bytes 0-3: frame size (little-endian u32)
+            //   bytes 4-11: timestamp (little-endian u64)
+            let mut frame_header = [0u8; 12];
+            if reader.read_exact(&mut frame_header).is_err() {
+                break; // EOF
+            }
+            let frame_size = u32::from_le_bytes([
+                frame_header[0],
+                frame_header[1],
+                frame_header[2],
+                frame_header[3],
+            ]) as usize;
+
+            // Read frame data
+            let mut data = vec![0u8; frame_size];
+            if reader.read_exact(&mut data).is_err() {
+                break;
+            }
+
+            // VP8 keyframe detection: bit 0 of first byte is 0 for keyframe
+            let is_keyframe = !data.is_empty() && (data[0] & 0x01) == 0;
+
+            if frame_tx
+                .blocking_send(IvfFrame { data, is_keyframe })
+                .is_err()
+            {
+                return;
+            }
         }
     });
 
@@ -206,13 +224,9 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
     let mut stream_count: u64 = 0;
     let mut group_started = false;
 
-    while let Some(nal) = nal_rx.recv().await {
-        let nal_type = nal_unit_type(&nal);
-        let is_idr = nal_type == 5;
-
-        // Start new group on IDR
-        if is_idr && group_started {
-            // Close current stream
+    while let Some(frame) = frame_rx.recv().await {
+        // Start new group on keyframe
+        if frame.is_keyframe && group_started {
             if let Some(mut stream) = current_stream.take() {
                 stream.finish()?;
             }
@@ -223,34 +237,29 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
         }
 
         // Open new stream if needed
-        if current_stream.is_none() || is_idr || !group_started {
-            if current_stream.is_none() && group_started {
-                // Should not happen, but handle gracefully
-            }
-            if is_idr || !group_started {
-                let mut uni = conn.open_uni().await?;
-                let header = SubgroupHeader {
-                    track_alias: 1,
-                    group_id,
-                };
-                let mut header_buf = Vec::new();
-                header.encode(&mut header_buf);
-                uni.write_all(&header_buf).await?;
-                current_stream = Some(uni);
-                group_started = true;
-            }
+        if current_stream.is_none() {
+            let mut uni = conn.open_uni().await?;
+            let header = SubgroupHeader {
+                track_alias: 1,
+                group_id,
+            };
+            let mut header_buf = Vec::new();
+            header.encode(&mut header_buf);
+            uni.write_all(&header_buf).await?;
+            current_stream = Some(uni);
+            group_started = true;
         }
 
-        // Write object
+        // Write object: 1 VP8 frame = 1 Object
         if let Some(ref mut stream) = current_stream {
             let obj = ObjectHeader {
                 object_id_delta: 0,
-                payload_length: nal.len() as u64,
+                payload_length: frame.data.len() as u64,
             };
             let mut obj_buf = Vec::new();
             obj.encode(&mut obj_buf);
             stream.write_all(&obj_buf).await?;
-            stream.write_all(&nal).await?;
+            stream.write_all(&frame.data).await?;
             object_id += 1;
         }
     }
@@ -263,51 +272,6 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
     }
 
     Ok(stream_count)
-}
-
-/// Find the position of the Nth start code (0x00000001 or 0x000001) in data.
-/// Returns None if not found. skip=0 finds the first, skip=1 finds the second, etc.
-fn find_start_code(data: &[u8], skip: usize) -> Option<usize> {
-    let mut found = 0;
-    let mut i = 0;
-    while i < data.len() {
-        if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 {
-            if i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1 {
-                if found == skip {
-                    return Some(i);
-                }
-                found += 1;
-                i += 4;
-                continue;
-            } else if data[i + 2] == 1 {
-                if found == skip {
-                    return Some(i);
-                }
-                found += 1;
-                i += 3;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Get the NAL unit type from a NAL unit (including start code).
-fn nal_unit_type(nal: &[u8]) -> u8 {
-    // Skip start code to find the NAL header byte
-    let offset = if nal.len() > 3 && nal[0] == 0 && nal[1] == 0 && nal[2] == 0 && nal[3] == 1 {
-        4
-    } else if nal.len() > 2 && nal[0] == 0 && nal[1] == 0 && nal[2] == 1 {
-        3
-    } else {
-        0
-    };
-    if offset < nal.len() {
-        nal[offset] & 0x1f
-    } else {
-        0
-    }
 }
 
 fn make_insecure_client_config() -> quinn::ClientConfig {

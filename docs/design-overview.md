@@ -17,8 +17,19 @@ moqt-sub/            # Subscriber バイナリ（テスト/デモ用）
 2. SETUP 交換
 3. PUBLISH_NAMESPACE を送信し、REQUEST_OK を受信
 4. SUBSCRIBE を受信したら SUBSCRIBE_OK を返す
-5. 疑似データ（固定バイト列）を Group/Object として送信
+5. `--pipe` モード: stdin から H.264 Annex B バイトストリームを読み、Object として送信
+   - デフォルトモード: 疑似データ（固定バイト列）を送信
 6. 終了時に PUBLISH_DONE を送信
+
+### H.264 → MOQT マッピング（--pipe モード）
+
+前提: ffmpeg `-tune zerolatency` で SPS/PPS がキーフレームの前にインバンドで毎回送られる。
+
+- 1 NAL unit = 1 Object
+- SPS (NAL type 7) の到着で新しい Group を開始
+  - SPS → PPS → IDR → P, P, P... が 1 Group にまとまる
+  - Group の先頭からデコード開始可能（SPS + PPS + IDR が揃うため）
+- SPS がインバンドで来ない設定の場合、この方式は使えない（IDR で Group を切り、SPS/PPS を別途渡す仕組みが必要）
 
 ## moqt-sub
 
