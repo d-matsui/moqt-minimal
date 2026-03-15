@@ -102,9 +102,27 @@ mod tests {
     #[test]
     fn multiple_objects_on_stream() {
         let objects = vec![
-            (ObjectHeader { object_id_delta: 0, payload_length: 3 }, b"abc".to_vec()),
-            (ObjectHeader { object_id_delta: 0, payload_length: 3 }, b"def".to_vec()),
-            (ObjectHeader { object_id_delta: 0, payload_length: 3 }, b"ghi".to_vec()),
+            (
+                ObjectHeader {
+                    object_id_delta: 0,
+                    payload_length: 3,
+                },
+                b"abc".to_vec(),
+            ),
+            (
+                ObjectHeader {
+                    object_id_delta: 0,
+                    payload_length: 3,
+                },
+                b"def".to_vec(),
+            ),
+            (
+                ObjectHeader {
+                    object_id_delta: 0,
+                    payload_length: 3,
+                },
+                b"ghi".to_vec(),
+            ),
         ];
 
         let mut buf = Vec::new();

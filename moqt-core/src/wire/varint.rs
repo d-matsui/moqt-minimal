@@ -233,7 +233,10 @@ mod tests {
     fn spec_example_u64_max() {
         let mut buf = Vec::new();
         encode_varint(u64::MAX, &mut buf);
-        assert_eq!(buf, vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            buf,
+            vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
     }
 
     // 1.1: 最小バイト数でエンコードされる
@@ -260,7 +263,11 @@ mod tests {
         for (value, expected_len) in cases {
             let mut buf = Vec::new();
             encode_varint(value, &mut buf);
-            assert_eq!(buf.len(), expected_len, "value={value} should encode in {expected_len} bytes");
+            assert_eq!(
+                buf.len(),
+                expected_len,
+                "value={value} should encode in {expected_len} bytes"
+            );
         }
     }
 

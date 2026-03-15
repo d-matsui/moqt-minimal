@@ -17,7 +17,10 @@ impl ControlStreamWriter {
 
     /// Write the SETUP message as the first message on the control stream.
     /// Also writes the stream type (0x2F00) before the SETUP message.
-    pub async fn write_setup(&mut self, msg: &crate::message::setup::SetupMessage) -> io::Result<()> {
+    pub async fn write_setup(
+        &mut self,
+        msg: &crate::message::setup::SetupMessage,
+    ) -> io::Result<()> {
         // Control stream starts with stream type = SETUP (0x2F00)
         let mut buf = Vec::new();
         encode_varint(MSG_SETUP, &mut buf);
@@ -49,18 +52,12 @@ impl ControlStreamWriter {
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(&payload);
 
-        self.stream
-            .write_all(&buf)
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        self.stream.write_all(&buf).await.map_err(io::Error::other)
     }
 
     /// Write a raw control message (already framed with Type + Length + Payload).
     pub async fn write_raw(&mut self, data: &[u8]) -> io::Result<()> {
-        self.stream
-            .write_all(data)
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        self.stream.write_all(data).await.map_err(io::Error::other)
     }
 }
 
@@ -93,7 +90,7 @@ impl ControlStreamReader {
         self.stream
             .read_exact(&mut len_bytes)
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
         let payload_len = u16::from_be_bytes(len_bytes) as usize;
 
         // Read payload
@@ -102,7 +99,7 @@ impl ControlStreamReader {
             self.stream
                 .read_exact(&mut payload)
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
         }
 
         // Reconstruct the full message bytes
@@ -119,7 +116,7 @@ impl ControlStreamReader {
         self.stream
             .read_exact(&mut first)
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         let byte = first[0];
         let total_len = if byte & 0x80 == 0 {
@@ -151,7 +148,7 @@ impl ControlStreamReader {
             self.stream
                 .read_exact(&mut raw[1..])
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
         }
 
         let mut slice = raw.as_slice();

@@ -40,7 +40,10 @@ pub fn decode_track_namespace(buf: &mut &[u8]) -> io::Result<TrackNamespace> {
         if buf.len() < field_len {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                format!("need {field_len} bytes for namespace field, have {}", buf.len()),
+                format!(
+                    "need {field_len} bytes for namespace field, have {}",
+                    buf.len()
+                ),
             ));
         }
         fields.push(buf[..field_len].to_vec());

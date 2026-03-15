@@ -1,9 +1,9 @@
 use std::io;
 
+use super::{decode_message_header, encode_message_frame, MSG_SETUP};
 use crate::wire::key_value_pair::{
     decode_key_value_pairs, encode_key_value_pairs, KeyValuePair, KvValue,
 };
-use super::{decode_message_header, encode_message_frame, MSG_SETUP};
 
 const OPTION_PATH: u64 = 0x01;
 const OPTION_AUTHORITY: u64 = 0x05;

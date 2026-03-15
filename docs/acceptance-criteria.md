@@ -137,6 +137,11 @@
 - [x] Publisher が 1 Group 内に複数 Object を送信し、Subscriber が全て順序通り受信できる — `object_forwarding`
 - [x] Object ID Delta が正しくエンコード/デコードされる — `object_forwarding` + 単体テスト
 
+### 5.5 ストリーミング転送
+
+- [ ] Relay が Object 単位で即座に転送する（stream 全体をバッファしない） — **未テスト・要実装修正**
+- [ ] Publisher が1つの Group 内で Object を逐次送信中に、Subscriber が Object を逐次受信できる — **未テスト**
+
 ### 5.3 複数 Group
 
 - [x] Publisher が複数 Group を順次送信し、Subscriber が全て受信できる — `multiple_groups`
@@ -182,4 +187,8 @@
 
 ---
 
-## 全項目達成
+## 未達サマリ
+
+| # | 項目 | 理由 |
+|---|------|------|
+| 5.5 | ストリーミング転送 | Relay が stream 全体をバッファしてから転送している。Object 単位で即座に転送するよう修正が必要 |

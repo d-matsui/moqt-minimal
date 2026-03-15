@@ -6,6 +6,10 @@ use moqt_core::session::quic_config;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
+
     let addr: SocketAddr = "0.0.0.0:4433".parse()?;
 
     // Generate self-signed cert

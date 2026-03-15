@@ -366,11 +366,23 @@ Key-Value-Pair {
 
 ### 6.3 Object の転送
 
-1. Publisher が Relay に Subgroup stream で Object を送信
-2. Relay が受信した Object を全 Subscriber に転送
-   - Track Alias を Subscriber 側のものに差し替え
-   - それ以外の Object フィールドはそのまま転送
-   - キャッシュしない（pass-through）
+仕様 Section 8.4: "Each new Object belonging to the Track is forwarded to each subscriber"
+
+Relay は stream 全体をバッファしてから転送するのではなく、**Object 単位で即座に転送する**:
+
+1. Publisher から Subgroup stream（unidirectional）を受け取る
+2. SUBGROUP_HEADER を読み、Track Alias から該当 Subscriber を特定する
+3. 各 Subscriber に対して新しい Subgroup stream を開き、SUBGROUP_HEADER を書き込む
+4. Object header（Object ID Delta + Payload Length）を読む
+5. Payload を読む
+6. **即座に** 各 Subscriber の stream に Object header + Payload を書き込む
+7. 4-6 を stream が閉じるまで繰り返す
+8. Publisher の stream が FIN で閉じたら、Subscriber の stream も FIN で閉じる
+
+注意:
+- Track Alias は SUBGROUP_HEADER に含まれる（Object fields には含まれない）。Subscriber 側の Alias に差し替えて書き込む
+- Object fields（Object ID Delta, Payload Length, Payload）はそのまま転送（Section 8.7: "A relay MUST NOT modify Object fields"）
+- キャッシュしない（pass-through）
 
 ### 6.4 PUBLISH_DONE の転送
 

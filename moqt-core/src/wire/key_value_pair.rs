@@ -43,9 +43,9 @@ pub fn decode_key_value_pairs(buf: &mut &[u8]) -> io::Result<Vec<KeyValuePair>> 
 
     while !buf.is_empty() {
         let delta = decode_varint(buf)?;
-        let type_id = prev_type.checked_add(delta).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "type overflow")
-        })?;
+        let type_id = prev_type
+            .checked_add(delta)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "type overflow"))?;
 
         let value = if type_id % 2 == 0 {
             // Even type: varint value

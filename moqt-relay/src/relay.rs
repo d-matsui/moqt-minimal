@@ -5,7 +5,6 @@ use std::sync::Arc;
 use quinn::{Connection, Endpoint};
 use tokio::sync::Mutex;
 
-use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::request_error::RequestErrorMessage;
@@ -33,9 +32,6 @@ struct RelayState {
     namespace_publishers: HashMap<TrackNamespace, SessionId>,
     subscriptions: Vec<SubscriptionEntry>,
     request_id_alloc: RequestIdAllocator,
-    /// Track which publishers already have a forwarding task running.
-    /// Key: publisher session ID. Prevents spawning duplicate forward_objects tasks.
-    forwarding_publishers: std::collections::HashSet<SessionId>,
 }
 
 struct SessionState {
@@ -48,8 +44,8 @@ struct SubscriptionEntry {
     track_namespace: TrackNamespace,
     track_name: Vec<u8>,
     publisher_track_alias: u64,
+    #[allow(dead_code)]
     subscriber_track_alias: u64,
-    /// Send half of the subscriber's bidi stream, for sending PUBLISH_DONE.
     subscriber_bidi_send: Arc<Mutex<quinn::SendStream>>,
 }
 
@@ -63,7 +59,6 @@ impl Relay {
                 namespace_publishers: HashMap::new(),
                 subscriptions: Vec::new(),
                 request_id_alloc: RequestIdAllocator::server(),
-                forwarding_publishers: std::collections::HashSet::new(),
             })),
         }
     }
@@ -85,9 +80,7 @@ async fn handle_connection(
     incoming: quinn::Incoming,
     state: Arc<Mutex<RelayState>>,
 ) -> io::Result<()> {
-    let connection = incoming
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let connection = incoming.await.map_err(io::Error::other)?;
 
     let session_id = {
         let mut s = state.lock().await;
@@ -103,10 +96,7 @@ async fn handle_connection(
     };
 
     // SETUP exchange
-    let mut our_ctrl_send = connection
-        .open_uni()
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let mut our_ctrl_send = connection.open_uni().await.map_err(io::Error::other)?;
     let server_setup = SetupMessage {
         setup_options: vec![],
     };
@@ -115,33 +105,47 @@ async fn handle_connection(
     our_ctrl_send
         .write_all(&setup_buf)
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
-    let peer_ctrl_recv = connection
-        .accept_uni()
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let peer_ctrl_recv = connection.accept_uni().await.map_err(io::Error::other)?;
     let mut ctrl_reader = ControlStreamReader::new(peer_ctrl_recv);
     let _peer_setup = ctrl_reader.read_setup().await?;
 
-    // Handle bidi streams
+    // Handle both bidi streams and uni streams concurrently
     loop {
-        let bidi = connection.accept_bi().await;
-        match bidi {
-            Ok((send, recv)) => {
-                let state = state.clone();
-                let conn = connection.clone();
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        handle_bidi_stream(session_id, send, recv, state, conn).await
-                    {
-                        eprintln!("bidi stream error: {e}");
+        tokio::select! {
+            bidi = connection.accept_bi() => {
+                match bidi {
+                    Ok((send, recv)) => {
+                        let state = state.clone();
+                        let conn = connection.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_bidi_stream(session_id, send, recv, state, conn).await {
+                                eprintln!("bidi stream error: {e}");
+                            }
+                        });
                     }
-                });
+                    Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
+                    Err(quinn::ConnectionError::LocallyClosed) => break,
+                    Err(e) => return Err(io::Error::other(e)),
+                }
             }
-            Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
-            Err(quinn::ConnectionError::LocallyClosed) => break,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
+            uni = connection.accept_uni() => {
+                match uni {
+                    Ok(recv) => {
+                        let state = state.clone();
+                        let sid = session_id;
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_incoming_uni(sid, recv, state).await {
+                                eprintln!("uni stream error: {e}");
+                            }
+                        });
+                    }
+                    Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
+                    Err(quinn::ConnectionError::LocallyClosed) => break,
+                    Err(e) => return Err(io::Error::other(e)),
+                }
+            }
         }
     }
 
@@ -150,10 +154,181 @@ async fn handle_connection(
         let mut s = state.lock().await;
         s.sessions.remove(&session_id);
         s.namespace_publishers.retain(|_, v| *v != session_id);
-        s.forwarding_publishers.remove(&session_id);
         s.subscriptions.retain(|sub| {
             sub.subscriber_session != session_id && sub.publisher_session != session_id
         });
+    }
+
+    Ok(())
+}
+
+/// Read exactly `n` bytes from a RecvStream.
+async fn read_exact(recv: &mut quinn::RecvStream, n: usize) -> io::Result<Vec<u8>> {
+    let mut buf = vec![0u8; n];
+    let mut filled = 0;
+    while filled < n {
+        match recv.read(&mut buf[filled..]).await {
+            Ok(Some(read)) => filled += read,
+            Ok(None) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("stream ended after {filled}/{n} bytes"),
+                ))
+            }
+            Err(e) => return Err(io::Error::other(e)),
+        }
+    }
+    Ok(buf)
+}
+
+/// Read a varint from a RecvStream. Returns (value, raw_bytes).
+async fn read_varint_from_stream(recv: &mut quinn::RecvStream) -> io::Result<(u64, Vec<u8>)> {
+    let first = read_exact(recv, 1).await?;
+    let byte = first[0];
+    let total_len = if byte & 0x80 == 0 {
+        1
+    } else if byte & 0xc0 == 0x80 {
+        2
+    } else if byte & 0xe0 == 0xc0 {
+        3
+    } else if byte & 0xf0 == 0xe0 {
+        4
+    } else if byte & 0xf8 == 0xf0 {
+        5
+    } else if byte & 0xfc == 0xf8 {
+        6
+    } else if byte == 0xfc {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid varint code point 0xFC",
+        ));
+    } else if byte == 0xfe {
+        8
+    } else {
+        9
+    };
+
+    let mut raw = vec![0u8; total_len];
+    raw[0] = byte;
+    if total_len > 1 {
+        let rest = read_exact(recv, total_len - 1).await?;
+        raw[1..].copy_from_slice(&rest);
+    }
+
+    let mut slice = raw.as_slice();
+    let value = decode_varint(&mut slice)?;
+    Ok((value, raw))
+}
+
+/// Handle an incoming unidirectional stream (Object data from a publisher).
+/// Streams Objects to subscribers one at a time without buffering the entire stream.
+async fn handle_incoming_uni(
+    sender_session: SessionId,
+    mut recv: quinn::RecvStream,
+    state: Arc<Mutex<RelayState>>,
+) -> io::Result<()> {
+    // Read SUBGROUP_HEADER: Type (varint) + Track Alias (varint) + Group ID (varint)
+    let (stream_type, type_bytes) = read_varint_from_stream(&mut recv).await?;
+    let (track_alias, alias_bytes) = read_varint_from_stream(&mut recv).await?;
+    let (_group_id, group_bytes) = read_varint_from_stream(&mut recv).await?;
+
+    // Verify it's a valid subgroup header type (bit 4 set)
+    if stream_type & 0x10 == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected SUBGROUP_HEADER, got type 0x{stream_type:X}"),
+        ));
+    }
+
+    // Find all subscribers and open downstream streams
+    let subscriber_streams: Vec<quinn::SendStream> = {
+        let s = state.lock().await;
+        let sub_conns: Vec<Connection> = s
+            .subscriptions
+            .iter()
+            .filter(|sub| {
+                sub.publisher_session == sender_session && sub.publisher_track_alias == track_alias
+            })
+            .filter_map(|sub| {
+                s.sessions
+                    .get(&sub.subscriber_session)
+                    .map(|sess| sess.connection.clone())
+            })
+            .collect();
+        drop(s);
+
+        let mut streams = Vec::new();
+        for conn in sub_conns {
+            match conn.open_uni().await {
+                Ok(stream) => streams.push(stream),
+                Err(e) => eprintln!("failed to open uni to subscriber: {e}"),
+            }
+        }
+        streams
+    };
+
+    if subscriber_streams.is_empty() {
+        // No subscribers, drain the stream
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            match recv.read(&mut tmp).await {
+                Ok(Some(_)) => continue,
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        return Ok(());
+    }
+
+    // Write SUBGROUP_HEADER to all subscriber streams
+    let mut header_bytes = Vec::new();
+    header_bytes.extend_from_slice(&type_bytes);
+    header_bytes.extend_from_slice(&alias_bytes);
+    header_bytes.extend_from_slice(&group_bytes);
+
+    let subscriber_streams: Vec<Arc<Mutex<quinn::SendStream>>> = subscriber_streams
+        .into_iter()
+        .map(|s| Arc::new(Mutex::new(s)))
+        .collect();
+
+    for stream in &subscriber_streams {
+        stream
+            .lock()
+            .await
+            .write_all(&header_bytes)
+            .await
+            .map_err(io::Error::other)?;
+    }
+
+    // Stream objects one by one
+    loop {
+        // Read Object ID Delta (varint)
+        let delta_result = read_varint_from_stream(&mut recv).await;
+        let (_delta, delta_bytes) = match delta_result {
+            Ok(v) => v,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break, // stream FIN
+            Err(e) => return Err(e),
+        };
+
+        // Read Payload Length (varint)
+        let (payload_len, len_bytes) = read_varint_from_stream(&mut recv).await?;
+
+        // Read Payload
+        let payload = read_exact(&mut recv, payload_len as usize).await?;
+
+        // Forward to all subscribers immediately
+        for stream in &subscriber_streams {
+            let mut s = stream.lock().await;
+            let _ = s.write_all(&delta_bytes).await;
+            let _ = s.write_all(&len_bytes).await;
+            let _ = s.write_all(&payload).await;
+        }
+    }
+
+    // Close all subscriber streams with FIN
+    for stream in subscriber_streams {
+        let mut s = stream.lock().await;
+        let _ = s.finish();
     }
 
     Ok(())
@@ -184,9 +359,7 @@ async fn handle_bidi_stream(
             let ok = RequestOkMessage {};
             let mut buf = Vec::new();
             ok.encode(&mut buf);
-            send.write_all(&buf)
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            send.write_all(&buf).await.map_err(io::Error::other)?;
         }
         MSG_SUBSCRIBE => {
             let msg = SubscribeMessage::decode(&mut slice)?;
@@ -246,7 +419,7 @@ async fn handle_subscribe(
             }
             None => {
                 let err = RequestErrorMessage {
-                    error_code: 0x10, // DOES_NOT_EXIST
+                    error_code: 0x10,
                     retry_interval: 0,
                     reason_phrase: ReasonPhrase {
                         value: b"no publisher for namespace".to_vec(),
@@ -259,21 +432,18 @@ async fn handle_subscribe(
                     .await
                     .write_all(&buf)
                     .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(io::Error::other)?;
                 return Ok(());
             }
         }
     };
 
     // Forward SUBSCRIBE to publisher
-    let (mut pub_send, pub_recv) = publisher_conn
-        .open_bi()
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let (mut pub_send, pub_recv) = publisher_conn.open_bi().await.map_err(io::Error::other)?;
 
     let relay_request_id = {
         let mut s = state.lock().await;
-        s.request_id_alloc.next()
+        s.request_id_alloc.allocate()
     };
     let upstream_subscribe = SubscribeMessage {
         request_id: relay_request_id,
@@ -284,10 +454,7 @@ async fn handle_subscribe(
     };
     let mut buf = Vec::new();
     upstream_subscribe.encode(&mut buf);
-    pub_send
-        .write_all(&buf)
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    pub_send.write_all(&buf).await.map_err(io::Error::other)?;
 
     // Read SUBSCRIBE_OK from publisher
     let mut pub_reader = ControlStreamReader::new(pub_recv);
@@ -309,19 +476,6 @@ async fn handle_subscribe(
             subscriber_track_alias: track_alias,
             subscriber_bidi_send: subscriber_send.clone(),
         });
-
-        // Start forwarding task for this publisher if not already running
-        if !s.forwarding_publishers.contains(&publisher_session_id) {
-            s.forwarding_publishers.insert(publisher_session_id);
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                if let Err(e) =
-                    forward_objects(publisher_session_id, state_clone).await
-                {
-                    eprintln!("object forwarding error: {e}");
-                }
-            });
-        }
     }
 
     // Forward SUBSCRIBE_OK to subscriber
@@ -332,14 +486,13 @@ async fn handle_subscribe(
         .await
         .write_all(&ok_buf)
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
-    // Wait for PUBLISH_DONE from publisher, forward to all subscribers of this track
+    // Wait for PUBLISH_DONE from publisher, forward to all subscribers
     let done_bytes = pub_reader.read_message_bytes().await?;
     let mut done_slice = done_bytes.as_slice();
     let _publish_done = PublishDoneMessage::decode(&mut done_slice)?;
 
-    // Forward to all subscribers for this publisher + track
     let subs_to_notify: Vec<Arc<Mutex<quinn::SendStream>>> = {
         let s = state.lock().await;
         s.subscriptions
@@ -354,117 +507,7 @@ async fn handle_subscribe(
     };
 
     for send in subs_to_notify {
-        let _ = send
-            .lock()
-            .await
-            .write_all(&done_bytes)
-            .await;
-    }
-
-    Ok(())
-}
-
-/// Forward Object streams from a publisher to all subscribers.
-/// One task per publisher — reads uni streams and fans out to all matching subscribers.
-async fn forward_objects(
-    publisher_session: SessionId,
-    state: Arc<Mutex<RelayState>>,
-) -> io::Result<()> {
-    let publisher_conn = {
-        let s = state.lock().await;
-        s.sessions
-            .get(&publisher_session)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "publisher gone"))?
-            .connection
-            .clone()
-    };
-
-    loop {
-        let uni = publisher_conn.accept_uni().await;
-        match uni {
-            Ok(mut recv) => {
-                let state = state.clone();
-                let pub_session = publisher_session;
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        forward_one_subgroup(&mut recv, pub_session, state).await
-                    {
-                        eprintln!("subgroup forward error: {e}");
-                    }
-                });
-            }
-            Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
-            Err(quinn::ConnectionError::LocallyClosed) => break,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
-        }
-    }
-
-    Ok(())
-}
-
-async fn forward_one_subgroup(
-    recv: &mut quinn::RecvStream,
-    publisher_session: SessionId,
-    state: Arc<Mutex<RelayState>>,
-) -> io::Result<()> {
-    let mut all_data = Vec::new();
-    let mut tmp = vec![0u8; 4096];
-    loop {
-        match recv.read(&mut tmp).await {
-            Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-            Ok(None) => break,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
-        }
-    }
-
-    if all_data.is_empty() {
-        return Ok(());
-    }
-
-    // Decode header to get track alias
-    let mut check = all_data.as_slice();
-    let header = SubgroupHeader::decode(&mut check)?;
-
-    // Find all subscribers for this publisher + track alias
-    let subscriber_conns: Vec<(SessionId, Connection)> = {
-        let s = state.lock().await;
-        s.subscriptions
-            .iter()
-            .filter(|sub| {
-                sub.publisher_session == publisher_session
-                    && sub.publisher_track_alias == header.track_alias
-            })
-            .filter_map(|sub| {
-                s.sessions
-                    .get(&sub.subscriber_session)
-                    .map(|sess| (sub.subscriber_session, sess.connection.clone()))
-            })
-            .collect()
-    };
-
-    // Forward to each subscriber
-    for (_sub_id, sub_conn) in subscriber_conns {
-        let data = all_data.clone();
-        tokio::spawn(async move {
-            let result = async {
-                let mut sub_send = sub_conn
-                    .open_uni()
-                    .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                sub_send
-                    .write_all(&data)
-                    .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                sub_send
-                    .finish()
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                Ok::<(), io::Error>(())
-            }
-            .await;
-            if let Err(e) = result {
-                eprintln!("forward to subscriber error: {e}");
-            }
-        });
+        let _ = send.lock().await.write_all(&done_bytes).await;
     }
 
     Ok(())

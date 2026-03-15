@@ -1,8 +1,10 @@
 use std::io;
 
-use crate::wire::track_namespace::{decode_track_namespace, encode_track_namespace, TrackNamespace};
-use crate::wire::varint::{decode_varint, encode_varint};
 use super::{decode_message_header, encode_message_frame, MSG_PUBLISH_NAMESPACE};
+use crate::wire::track_namespace::{
+    decode_track_namespace, encode_track_namespace, TrackNamespace,
+};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishNamespaceMessage {
@@ -27,7 +29,9 @@ impl PublishNamespaceMessage {
         if msg_type != MSG_PUBLISH_NAMESPACE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("expected PUBLISH_NAMESPACE (0x{MSG_PUBLISH_NAMESPACE:X}), got 0x{msg_type:X}"),
+                format!(
+                    "expected PUBLISH_NAMESPACE (0x{MSG_PUBLISH_NAMESPACE:X}), got 0x{msg_type:X}"
+                ),
             ));
         }
         let mut p = payload.as_slice();

@@ -284,6 +284,12 @@ dependencies = [
 [[package]]
 name = "moqt-core"
 version = "0.1.0"
+dependencies = [
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
+ "tokio",
+]
 
 [[package]]
 name = "moqt-pub"
@@ -293,6 +299,7 @@ dependencies = [
  "quinn",
  "rcgen",
  "rustls",
+ "rustls-pki-types",
  "tokio",
 ]
 
@@ -304,6 +311,7 @@ dependencies = [
  "quinn",
  "rcgen",
  "rustls",
+ "rustls-pki-types",
  "tokio",
 ]
 
@@ -315,6 +323,7 @@ dependencies = [
  "quinn",
  "rcgen",
  "rustls",
+ "rustls-pki-types",
  "tokio",
 ]
 

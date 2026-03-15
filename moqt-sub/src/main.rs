@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::SocketAddr;
 
 use moqt_core::data::object::{resolve_object_id, ObjectHeader};
@@ -16,18 +17,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("Failed to install crypto provider");
 
-    let relay_addr: SocketAddr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:4433".to_string())
+    let args: Vec<String> = std::env::args().collect();
+    let pipe_mode = args.iter().any(|a| a == "--pipe");
+    let relay_addr: SocketAddr = args
+        .iter()
+        .find(|a| !a.starts_with('-') && a.contains(':'))
+        .map(|s| s.as_str())
+        .unwrap_or("127.0.0.1:4433")
         .parse()?;
+    let namespace = args
+        .iter()
+        .position(|a| a == "--ns")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("example");
+    let track_name = args
+        .iter()
+        .position(|a| a == "--track")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("video");
 
     let client_config = make_insecure_client_config();
     let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())?;
     endpoint.set_default_client_config(client_config);
 
-    println!("Connecting to relay at {relay_addr}...");
+    if !pipe_mode {
+        eprintln!("Connecting to relay at {relay_addr}...");
+    }
     let connection = endpoint.connect(relay_addr, "localhost")?.await?;
-    println!("Connected.");
+    if !pipe_mode {
+        eprintln!("Connected.");
+    }
 
     // SETUP exchange
     let mut ctrl_send = connection.open_uni().await?;
@@ -44,7 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recv = connection.accept_uni().await?;
     let mut reader = ControlStreamReader::new(recv);
     let _relay_setup = reader.read_setup().await?;
-    println!("SETUP exchange complete.");
+    if !pipe_mode {
+        eprintln!("SETUP exchange complete.");
+    }
 
     // SUBSCRIBE
     let (mut sub_send, sub_recv) = connection.open_bi().await?;
@@ -52,9 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         request_id: 0,
         required_request_id_delta: 0,
         track_namespace: TrackNamespace {
-            fields: vec![b"example".to_vec()],
+            fields: vec![namespace.as_bytes().to_vec()],
         },
-        track_name: b"video".to_vec(),
+        track_name: track_name.as_bytes().to_vec(),
         parameters: vec![MessageParameter::SubscriptionFilter(
             SubscriptionFilter::NextGroupStart,
         )],
@@ -62,22 +85,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     buf.clear();
     subscribe.encode(&mut buf);
     sub_send.write_all(&buf).await?;
-    println!("Sent SUBSCRIBE.");
+    if !pipe_mode {
+        eprintln!("Sent SUBSCRIBE.");
+    }
 
     // Read SUBSCRIBE_OK
     let mut sub_reader = ControlStreamReader::new(sub_recv);
     let ok_bytes = sub_reader.read_message_bytes().await?;
     let mut slice = ok_bytes.as_slice();
     let subscribe_ok = SubscribeOkMessage::decode(&mut slice)?;
-    println!("Received SUBSCRIBE_OK (alias={}).", subscribe_ok.track_alias);
+    if !pipe_mode {
+        eprintln!(
+            "Received SUBSCRIBE_OK (alias={}).",
+            subscribe_ok.track_alias
+        );
+    }
 
     // Receive Object streams
     let conn = connection.clone();
     let receive_handle = tokio::spawn(async move {
+        let stdout = std::io::stdout();
         loop {
             match conn.accept_uni().await {
                 Ok(mut uni_recv) => {
-                    // Read all data from the stream
                     let mut all_data = Vec::new();
                     let mut tmp = vec![0u8; 4096];
                     loop {
@@ -95,25 +125,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
 
-                    // Decode
                     let mut data = all_data.as_slice();
                     match SubgroupHeader::decode(&mut data) {
                         Ok(header) => {
-                            println!(
-                                "  Group {} (alias={}):",
-                                header.group_id, header.track_alias
-                            );
-                            let mut prev_id: Option<u64> = None;
-                            while !data.is_empty() {
-                                let obj = ObjectHeader::decode(&mut data).unwrap();
-                                let id = resolve_object_id(prev_id, obj.object_id_delta);
-                                let payload = &data[..obj.payload_length as usize];
-                                data = &data[obj.payload_length as usize..];
-                                println!(
-                                    "    Object {id}: {}",
-                                    String::from_utf8_lossy(payload)
+                            if pipe_mode {
+                                // Pipe mode: write raw payloads to stdout
+                                while !data.is_empty() {
+                                    if let Ok(obj) = ObjectHeader::decode(&mut data) {
+                                        let payload = &data[..obj.payload_length as usize];
+                                        data = &data[obj.payload_length as usize..];
+                                        let mut out = stdout.lock();
+                                        let _ = out.write_all(payload);
+                                        let _ = out.flush();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // Demo mode: print human-readable
+                                eprintln!(
+                                    "  Group {} (alias={}):",
+                                    header.group_id, header.track_alias
                                 );
-                                prev_id = Some(id);
+                                let mut prev_id: Option<u64> = None;
+                                while !data.is_empty() {
+                                    let obj = ObjectHeader::decode(&mut data).unwrap();
+                                    let id = resolve_object_id(prev_id, obj.object_id_delta);
+                                    let payload = &data[..obj.payload_length as usize];
+                                    data = &data[obj.payload_length as usize..];
+                                    eprintln!(
+                                        "    Object {id}: {}",
+                                        String::from_utf8_lossy(payload)
+                                    );
+                                    prev_id = Some(id);
+                                }
                             }
                         }
                         Err(e) => eprintln!("decode error: {e}"),
@@ -133,17 +178,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let done_bytes = sub_reader.read_message_bytes().await?;
     let mut done_slice = done_bytes.as_slice();
     let publish_done = PublishDoneMessage::decode(&mut done_slice)?;
-    println!(
-        "Received PUBLISH_DONE (status={}, streams={}).",
-        publish_done.status_code, publish_done.stream_count
-    );
+    if !pipe_mode {
+        eprintln!(
+            "Received PUBLISH_DONE (status={}, streams={}).",
+            publish_done.status_code, publish_done.stream_count
+        );
+    }
 
-    // Give a moment for remaining objects to arrive
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     connection.close(0u32.into(), b"done");
     let _ = receive_handle.await;
 
-    println!("Done.");
+    if !pipe_mode {
+        eprintln!("Done.");
+    }
     Ok(())
 }
 
@@ -156,18 +204,28 @@ fn make_insecure_client_config() -> quinn::ClientConfig {
 
     impl ServerCertVerifier for SkipVerification {
         fn verify_server_cert(
-            &self, _: &rustls_pki_types::CertificateDer<'_>, _: &[rustls_pki_types::CertificateDer<'_>],
-            _: &rustls::pki_types::ServerName<'_>, _: &[u8], _: rustls::pki_types::UnixTime,
+            &self,
+            _: &rustls_pki_types::CertificateDer<'_>,
+            _: &[rustls_pki_types::CertificateDer<'_>],
+            _: &rustls::pki_types::ServerName<'_>,
+            _: &[u8],
+            _: rustls::pki_types::UnixTime,
         ) -> Result<ServerCertVerified, rustls::Error> {
             Ok(ServerCertVerified::assertion())
         }
         fn verify_tls12_signature(
-            &self, _: &[u8], _: &rustls_pki_types::CertificateDer<'_>, _: &rustls::DigitallySignedStruct,
+            &self,
+            _: &[u8],
+            _: &rustls_pki_types::CertificateDer<'_>,
+            _: &rustls::DigitallySignedStruct,
         ) -> Result<HandshakeSignatureValid, rustls::Error> {
             Ok(HandshakeSignatureValid::assertion())
         }
         fn verify_tls13_signature(
-            &self, _: &[u8], _: &rustls_pki_types::CertificateDer<'_>, _: &rustls::DigitallySignedStruct,
+            &self,
+            _: &[u8],
+            _: &rustls_pki_types::CertificateDer<'_>,
+            _: &rustls::DigitallySignedStruct,
         ) -> Result<HandshakeSignatureValid, rustls::Error> {
             Ok(HandshakeSignatureValid::assertion())
         }

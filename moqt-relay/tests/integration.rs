@@ -40,7 +40,11 @@ fn gen_cert() -> (
 }
 
 /// Helper: start relay on a random port and return the endpoint + address.
-async fn start_relay() -> (quinn::Endpoint, SocketAddr, rustls_pki_types::CertificateDer<'static>) {
+async fn start_relay() -> (
+    quinn::Endpoint,
+    SocketAddr,
+    rustls_pki_types::CertificateDer<'static>,
+) {
     let (cert_der, key_der) = gen_cert();
     let server_config = quic_config::make_server_config(cert_der.clone(), key_der);
     let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -55,8 +59,7 @@ async fn connect_client(
     cert_der: rustls_pki_types::CertificateDer<'static>,
 ) -> quinn::Connection {
     let client_config = quic_config::make_client_config(cert_der);
-    let mut client_endpoint =
-        quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(client_config);
 
     let connection = client_endpoint
@@ -86,10 +89,7 @@ async fn connect_client(
 }
 
 /// Helper: send PUBLISH_NAMESPACE and receive REQUEST_OK
-async fn publish_namespace(
-    conn: &quinn::Connection,
-    namespace: TrackNamespace,
-) {
+async fn publish_namespace(conn: &quinn::Connection, namespace: TrackNamespace) {
     let (mut send, recv) = conn.open_bi().await.unwrap();
     let msg = PublishNamespaceMessage {
         request_id: 0,
@@ -123,7 +123,9 @@ async fn session_setup() {
             let conn = incoming.await.unwrap();
             // Send SETUP
             let mut ctrl = conn.open_uni().await.unwrap();
-            let setup = SetupMessage { setup_options: vec![] };
+            let setup = SetupMessage {
+                setup_options: vec![],
+            };
             let mut buf = Vec::new();
             setup.encode(&mut buf);
             ctrl.write_all(&buf).await.unwrap();
@@ -467,8 +469,11 @@ async fn multiple_groups() {
     let pub_conn = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_conn,
-        TrackNamespace { fields: vec![b"example".to_vec()] },
-    ).await;
+        TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+    )
+    .await;
 
     // Publisher: accept SUBSCRIBE, send 3 groups with 2 objects each
     let pub_conn2 = pub_conn.clone();
@@ -479,14 +484,20 @@ async fn multiple_groups() {
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
 
-        let ok = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let ok = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+        };
         let mut buf = Vec::new();
         ok.encode(&mut buf);
         send.write_all(&buf).await.unwrap();
 
         for group_id in 0u64..3 {
             let mut uni = pub_conn2.open_uni().await.unwrap();
-            let header = SubgroupHeader { track_alias: 1, group_id };
+            let header = SubgroupHeader {
+                track_alias: 1,
+                group_id,
+            };
             let mut data = Vec::new();
             header.encode(&mut data);
 
@@ -520,7 +531,9 @@ async fn multiple_groups() {
     let subscribe = SubscribeMessage {
         request_id: 0,
         required_request_id_delta: 0,
-        track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+        track_namespace: TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
         track_name: b"video".to_vec(),
         parameters: vec![],
     };
@@ -554,7 +567,9 @@ async fn multiple_groups() {
         let mut payloads = Vec::new();
         while !data.is_empty() {
             let obj = ObjectHeader::decode(&mut data).unwrap();
-            let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap().to_string();
+            let payload = std::str::from_utf8(&data[..obj.payload_length as usize])
+                .unwrap()
+                .to_string();
             data = &data[obj.payload_length as usize..];
             payloads.push(payload);
         }
@@ -565,9 +580,18 @@ async fn multiple_groups() {
     received_groups.sort_by_key(|(gid, _)| *gid);
 
     assert_eq!(received_groups.len(), 3);
-    assert_eq!(received_groups[0], (0, vec!["g0o0".to_string(), "g0o1".to_string()]));
-    assert_eq!(received_groups[1], (1, vec!["g1o0".to_string(), "g1o1".to_string()]));
-    assert_eq!(received_groups[2], (2, vec!["g2o0".to_string(), "g2o1".to_string()]));
+    assert_eq!(
+        received_groups[0],
+        (0, vec!["g0o0".to_string(), "g0o1".to_string()])
+    );
+    assert_eq!(
+        received_groups[1],
+        (1, vec!["g1o0".to_string(), "g1o1".to_string()])
+    );
+    assert_eq!(
+        received_groups[2],
+        (2, vec!["g2o0".to_string(), "g2o1".to_string()])
+    );
 
     // Verify PUBLISH_DONE
     let done_bytes = sub_reader.read_message_bytes().await.unwrap();
@@ -590,8 +614,11 @@ async fn late_join() {
     let pub_conn = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_conn,
-        TrackNamespace { fields: vec![b"example".to_vec()] },
-    ).await;
+        TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+    )
+    .await;
 
     // Publisher: accept SUBSCRIBE (will come later), respond, send objects
     let pub_conn2 = pub_conn.clone();
@@ -602,7 +629,10 @@ async fn late_join() {
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
 
-        let ok = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let ok = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+        };
         let mut buf = Vec::new();
         ok.encode(&mut buf);
         send.write_all(&buf).await.unwrap();
@@ -610,7 +640,10 @@ async fn late_join() {
         // Send 2 groups after subscriber joins
         for group_id in 0u64..2 {
             let mut uni = pub_conn2.open_uni().await.unwrap();
-            let header = SubgroupHeader { track_alias: 1, group_id };
+            let header = SubgroupHeader {
+                track_alias: 1,
+                group_id,
+            };
             let mut data = Vec::new();
             header.encode(&mut data);
 
@@ -644,7 +677,9 @@ async fn late_join() {
     let subscribe = SubscribeMessage {
         request_id: 0,
         required_request_id_delta: 0,
-        track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+        track_namespace: TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
         track_name: b"video".to_vec(),
         parameters: vec![MessageParameter::SubscriptionFilter(
             SubscriptionFilter::NextGroupStart,
@@ -709,10 +744,7 @@ async fn alpn_mismatch() {
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(client_config);
 
-    let result = client_endpoint
-        .connect(addr, "localhost")
-        .unwrap()
-        .await;
+    let result = client_endpoint.connect(addr, "localhost").unwrap().await;
 
     assert!(result.is_err(), "connection with wrong ALPN should fail");
 }
@@ -765,8 +797,11 @@ async fn multiple_subscribers() {
     let pub_conn = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_conn,
-        TrackNamespace { fields: vec![b"example".to_vec()] },
-    ).await;
+        TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+    )
+    .await;
 
     // Publisher: accept 2 SUBSCRIBE (one per subscriber), respond to each, then send objects
     let pub_conn2 = pub_conn.clone();
@@ -777,7 +812,10 @@ async fn multiple_subscribers() {
         let sub_bytes1 = reader1.read_message_bytes().await.unwrap();
         let mut s1 = sub_bytes1.as_slice();
         let _sub1 = SubscribeMessage::decode(&mut s1).unwrap();
-        let ok = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let ok = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+        };
         let mut buf = Vec::new();
         ok.encode(&mut buf);
         send1.write_all(&buf).await.unwrap();
@@ -797,10 +835,16 @@ async fn multiple_subscribers() {
 
         // Send 1 group with 1 object
         let mut uni = pub_conn2.open_uni().await.unwrap();
-        let header = SubgroupHeader { track_alias: 1, group_id: 0 };
+        let header = SubgroupHeader {
+            track_alias: 1,
+            group_id: 0,
+        };
         let mut data = Vec::new();
         header.encode(&mut data);
-        let obj = ObjectHeader { object_id_delta: 0, payload_length: 6 };
+        let obj = ObjectHeader {
+            object_id_delta: 0,
+            payload_length: 6,
+        };
         obj.encode(&mut data);
         data.extend_from_slice(b"shared");
         uni.write_all(&data).await.unwrap();
@@ -828,7 +872,9 @@ async fn multiple_subscribers() {
         let subscribe = SubscribeMessage {
             request_id: 0,
             required_request_id_delta: 0,
-            track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+            track_namespace: TrackNamespace {
+                fields: vec![b"example".to_vec()],
+            },
             track_name: b"video".to_vec(),
             parameters: vec![],
         };
@@ -886,8 +932,11 @@ async fn multiple_tracks() {
     let pub_conn = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_conn,
-        TrackNamespace { fields: vec![b"example".to_vec()] },
-    ).await;
+        TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+    )
+    .await;
 
     // Publisher: accept 2 SUBSCRIBEs (video + audio), send objects on each
     let pub_conn2 = pub_conn.clone();
@@ -896,7 +945,10 @@ async fn multiple_tracks() {
         let (mut send_v, recv_v) = pub_conn2.accept_bi().await.unwrap();
         let mut reader_v = ControlStreamReader::new(recv_v);
         let _ = reader_v.read_message_bytes().await.unwrap();
-        let ok_v = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let ok_v = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+        };
         let mut buf = Vec::new();
         ok_v.encode(&mut buf);
         send_v.write_all(&buf).await.unwrap();
@@ -905,7 +957,10 @@ async fn multiple_tracks() {
         let (mut send_a, recv_a) = pub_conn2.accept_bi().await.unwrap();
         let mut reader_a = ControlStreamReader::new(recv_a);
         let _ = reader_a.read_message_bytes().await.unwrap();
-        let ok_a = SubscribeOkMessage { track_alias: 2, parameters: vec![] };
+        let ok_a = SubscribeOkMessage {
+            track_alias: 2,
+            parameters: vec![],
+        };
         buf.clear();
         ok_a.encode(&mut buf);
         send_a.write_all(&buf).await.unwrap();
@@ -915,8 +970,16 @@ async fn multiple_tracks() {
         // Send video object
         let mut uni_v = pub_conn2.open_uni().await.unwrap();
         let mut data_v = Vec::new();
-        SubgroupHeader { track_alias: 1, group_id: 0 }.encode(&mut data_v);
-        ObjectHeader { object_id_delta: 0, payload_length: 5 }.encode(&mut data_v);
+        SubgroupHeader {
+            track_alias: 1,
+            group_id: 0,
+        }
+        .encode(&mut data_v);
+        ObjectHeader {
+            object_id_delta: 0,
+            payload_length: 5,
+        }
+        .encode(&mut data_v);
         data_v.extend_from_slice(b"video");
         uni_v.write_all(&data_v).await.unwrap();
         uni_v.finish().unwrap();
@@ -924,8 +987,16 @@ async fn multiple_tracks() {
         // Send audio object
         let mut uni_a = pub_conn2.open_uni().await.unwrap();
         let mut data_a = Vec::new();
-        SubgroupHeader { track_alias: 2, group_id: 0 }.encode(&mut data_a);
-        ObjectHeader { object_id_delta: 0, payload_length: 5 }.encode(&mut data_a);
+        SubgroupHeader {
+            track_alias: 2,
+            group_id: 0,
+        }
+        .encode(&mut data_a);
+        ObjectHeader {
+            object_id_delta: 0,
+            payload_length: 5,
+        }
+        .encode(&mut data_a);
         data_a.extend_from_slice(b"audio");
         uni_a.write_all(&data_a).await.unwrap();
         uni_a.finish().unwrap();
@@ -950,7 +1021,9 @@ async fn multiple_tracks() {
     let sub_v = SubscribeMessage {
         request_id: 0,
         required_request_id_delta: 0,
-        track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+        track_namespace: TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
         track_name: b"video".to_vec(),
         parameters: vec![],
     };
@@ -965,7 +1038,9 @@ async fn multiple_tracks() {
     let sub_a = SubscribeMessage {
         request_id: 2,
         required_request_id_delta: 0,
-        track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+        track_namespace: TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
         track_name: b"audio".to_vec(),
         parameters: vec![],
     };
@@ -1015,8 +1090,11 @@ async fn subscriber_disconnect() {
     let pub_conn = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_conn,
-        TrackNamespace { fields: vec![b"example".to_vec()] },
-    ).await;
+        TrackNamespace {
+            fields: vec![b"example".to_vec()],
+        },
+    )
+    .await;
 
     // Publisher: accept SUBSCRIBE, respond, send objects continuously
     let pub_conn2 = pub_conn.clone();
@@ -1024,7 +1102,10 @@ async fn subscriber_disconnect() {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
         let mut reader = ControlStreamReader::new(recv);
         let _ = reader.read_message_bytes().await.unwrap();
-        let ok = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let ok = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+        };
         let mut buf = Vec::new();
         ok.encode(&mut buf);
         send.write_all(&buf).await.unwrap();
@@ -1033,8 +1114,16 @@ async fn subscriber_disconnect() {
         for group_id in 0u64..3 {
             let mut uni = pub_conn2.open_uni().await.unwrap();
             let mut data = Vec::new();
-            SubgroupHeader { track_alias: 1, group_id }.encode(&mut data);
-            ObjectHeader { object_id_delta: 0, payload_length: 4 }.encode(&mut data);
+            SubgroupHeader {
+                track_alias: 1,
+                group_id,
+            }
+            .encode(&mut data);
+            ObjectHeader {
+                object_id_delta: 0,
+                payload_length: 4,
+            }
+            .encode(&mut data);
             data.extend_from_slice(b"data");
             uni.write_all(&data).await.unwrap();
             uni.finish().unwrap();
@@ -1042,7 +1131,10 @@ async fn subscriber_disconnect() {
         }
 
         // Publisher connection should still be alive
-        assert!(!pub_conn2.close_reason().is_some(), "publisher should still be connected");
+        assert!(
+            pub_conn2.close_reason().is_none(),
+            "publisher should still be connected"
+        );
     });
 
     // Subscriber connects, subscribes, receives 1 group, then disconnects
@@ -1052,7 +1144,9 @@ async fn subscriber_disconnect() {
         let subscribe = SubscribeMessage {
             request_id: 0,
             required_request_id_delta: 0,
-            track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+            track_namespace: TrackNamespace {
+                fields: vec![b"example".to_vec()],
+            },
             track_name: b"video".to_vec(),
             parameters: vec![],
         };

@@ -67,9 +67,9 @@ pub fn decode_parameters(buf: &mut &[u8]) -> io::Result<Vec<MessageParameter>> {
     let mut prev_type: u64 = 0;
     for _ in 0..count {
         let delta = decode_varint(buf)?;
-        let type_id = prev_type.checked_add(delta).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "parameter type overflow")
-        })?;
+        let type_id = prev_type
+            .checked_add(delta)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "parameter type overflow"))?;
         let param = match type_id {
             PARAM_SUBSCRIPTION_FILTER => {
                 let len = decode_varint(buf)? as usize;
@@ -83,9 +83,7 @@ pub fn decode_parameters(buf: &mut &[u8]) -> io::Result<Vec<MessageParameter>> {
                 let filter_type = decode_varint(&mut inner)?;
                 *buf = &buf[len..];
                 match filter_type {
-                    0x1 => MessageParameter::SubscriptionFilter(
-                        SubscriptionFilter::NextGroupStart,
-                    ),
+                    0x1 => MessageParameter::SubscriptionFilter(SubscriptionFilter::NextGroupStart),
                     _ => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,

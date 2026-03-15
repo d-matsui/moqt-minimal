@@ -16,7 +16,7 @@ impl RequestIdAllocator {
     }
 
     /// Allocate the next Request ID.
-    pub fn next(&mut self) -> u64 {
+    pub fn allocate(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 2;
         id
@@ -30,16 +30,16 @@ mod tests {
     #[test]
     fn client_generates_even() {
         let mut alloc = RequestIdAllocator::client();
-        assert_eq!(alloc.next(), 0);
-        assert_eq!(alloc.next(), 2);
-        assert_eq!(alloc.next(), 4);
+        assert_eq!(alloc.allocate(), 0);
+        assert_eq!(alloc.allocate(), 2);
+        assert_eq!(alloc.allocate(), 4);
     }
 
     #[test]
     fn server_generates_odd() {
         let mut alloc = RequestIdAllocator::server();
-        assert_eq!(alloc.next(), 1);
-        assert_eq!(alloc.next(), 3);
-        assert_eq!(alloc.next(), 5);
+        assert_eq!(alloc.allocate(), 1);
+        assert_eq!(alloc.allocate(), 3);
+        assert_eq!(alloc.allocate(), 5);
     }
 }

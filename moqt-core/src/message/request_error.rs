@@ -1,8 +1,8 @@
 use std::io;
 
+use super::{decode_message_header, encode_message_frame, MSG_REQUEST_ERROR};
 use crate::wire::reason_phrase::{decode_reason_phrase, encode_reason_phrase, ReasonPhrase};
 use crate::wire::varint::{decode_varint, encode_varint};
-use super::{decode_message_header, encode_message_frame, MSG_REQUEST_ERROR};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestErrorMessage {
@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn empty_reason() {
         let msg = RequestErrorMessage {
-            error_code: 0x0, // INTERNAL_ERROR
+            error_code: 0x0,   // INTERNAL_ERROR
             retry_interval: 1, // immediate retry
             reason_phrase: ReasonPhrase { value: vec![] },
         };
