@@ -16,6 +16,7 @@ use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::publish_namespace::PublishNamespaceMessage;
+use moqt_core::message::request_error::RequestErrorMessage;
 use moqt_core::message::request_ok::RequestOkMessage;
 use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
@@ -680,4 +681,397 @@ async fn late_join() {
     let obj = ObjectHeader::decode(&mut data).unwrap();
     let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap();
     assert!(payload.starts_with("late-g"));
+}
+
+/// 3.1: ALPN mismatch — connection should fail
+#[tokio::test]
+async fn alpn_mismatch() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    // Spawn relay
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Create client with wrong ALPN
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.add(cert_der).unwrap();
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    client_crypto.alpn_protocols = vec![b"wrong-alpn".to_vec()];
+
+    let quic_client_config =
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap();
+    let client_config = quinn::ClientConfig::new(std::sync::Arc::new(quic_client_config));
+
+    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    client_endpoint.set_default_client_config(client_config);
+
+    let result = client_endpoint
+        .connect(addr, "localhost")
+        .unwrap()
+        .await;
+
+    assert!(result.is_err(), "connection with wrong ALPN should fail");
+}
+
+/// 4.3: SUBSCRIBE to unknown namespace → REQUEST_ERROR
+#[tokio::test]
+async fn subscribe_unknown_namespace() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Subscriber connects (no publisher registered)
+    let sub_conn = connect_client(addr, cert_der).await;
+    let (mut sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
+    let subscribe = SubscribeMessage {
+        request_id: 0,
+        required_request_id_delta: 0,
+        track_namespace: TrackNamespace {
+            fields: vec![b"nonexistent".to_vec()],
+        },
+        track_name: b"video".to_vec(),
+        parameters: vec![],
+    };
+    let mut buf = Vec::new();
+    subscribe.encode(&mut buf);
+    sub_send.write_all(&buf).await.unwrap();
+
+    // Should receive REQUEST_ERROR
+    let mut reader = ControlStreamReader::new(sub_recv);
+    let err_bytes = reader.read_message_bytes().await.unwrap();
+    let mut slice = err_bytes.as_slice();
+    let err = RequestErrorMessage::decode(&mut slice).unwrap();
+    assert_eq!(err.error_code, 0x10); // DOES_NOT_EXIST
+}
+
+/// 6.1: Multiple subscribers receive the same objects
+#[tokio::test]
+async fn multiple_subscribers() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher setup
+    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    publish_namespace(
+        &pub_conn,
+        TrackNamespace { fields: vec![b"example".to_vec()] },
+    ).await;
+
+    // Publisher: accept 2 SUBSCRIBE (one per subscriber), respond to each, then send objects
+    let pub_conn2 = pub_conn.clone();
+    let pub_handle = tokio::spawn(async move {
+        // Accept first SUBSCRIBE
+        let (mut send1, recv1) = pub_conn2.accept_bi().await.unwrap();
+        let mut reader1 = ControlStreamReader::new(recv1);
+        let sub_bytes1 = reader1.read_message_bytes().await.unwrap();
+        let mut s1 = sub_bytes1.as_slice();
+        let _sub1 = SubscribeMessage::decode(&mut s1).unwrap();
+        let ok = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let mut buf = Vec::new();
+        ok.encode(&mut buf);
+        send1.write_all(&buf).await.unwrap();
+
+        // Accept second SUBSCRIBE
+        let (mut send2, recv2) = pub_conn2.accept_bi().await.unwrap();
+        let mut reader2 = ControlStreamReader::new(recv2);
+        let sub_bytes2 = reader2.read_message_bytes().await.unwrap();
+        let mut s2 = sub_bytes2.as_slice();
+        let _sub2 = SubscribeMessage::decode(&mut s2).unwrap();
+        let mut buf2 = Vec::new();
+        ok.encode(&mut buf2);
+        send2.write_all(&buf2).await.unwrap();
+
+        // Small delay so both subscriptions are registered before sending
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Send 1 group with 1 object
+        let mut uni = pub_conn2.open_uni().await.unwrap();
+        let header = SubgroupHeader { track_alias: 1, group_id: 0 };
+        let mut data = Vec::new();
+        header.encode(&mut data);
+        let obj = ObjectHeader { object_id_delta: 0, payload_length: 6 };
+        obj.encode(&mut data);
+        data.extend_from_slice(b"shared");
+        uni.write_all(&data).await.unwrap();
+        uni.finish().unwrap();
+
+        // PUBLISH_DONE on both bidi streams
+        let done = PublishDoneMessage {
+            status_code: 0x2,
+            stream_count: 1,
+            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+        };
+        let mut done_buf = Vec::new();
+        done.encode(&mut done_buf);
+        send1.write_all(&done_buf).await.unwrap();
+        send2.write_all(&done_buf).await.unwrap();
+    });
+
+    // Helper to subscribe and receive objects
+    async fn subscribe_and_receive(
+        addr: SocketAddr,
+        cert_der: rustls_pki_types::CertificateDer<'static>,
+    ) -> Vec<u8> {
+        let conn = connect_client(addr, cert_der).await;
+        let (mut sub_send, sub_recv) = conn.open_bi().await.unwrap();
+        let subscribe = SubscribeMessage {
+            request_id: 0,
+            required_request_id_delta: 0,
+            track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+            track_name: b"video".to_vec(),
+            parameters: vec![],
+        };
+        let mut buf = Vec::new();
+        subscribe.encode(&mut buf);
+        sub_send.write_all(&buf).await.unwrap();
+
+        let mut reader = ControlStreamReader::new(sub_recv);
+        let _ok_bytes = reader.read_message_bytes().await.unwrap();
+
+        // Wait for objects
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let mut uni_recv = conn.accept_uni().await.unwrap();
+        let mut all_data = Vec::new();
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            match uni_recv.read(&mut tmp).await {
+                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
+                Ok(None) => break,
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        // Extract payload
+        let mut data = all_data.as_slice();
+        let _header = SubgroupHeader::decode(&mut data).unwrap();
+        let obj = ObjectHeader::decode(&mut data).unwrap();
+        data[..obj.payload_length as usize].to_vec()
+    }
+
+    // Two subscribers connect concurrently
+    let sub1 = tokio::spawn(subscribe_and_receive(addr, cert_der.clone()));
+    let sub2 = tokio::spawn(subscribe_and_receive(addr, cert_der));
+
+    pub_handle.await.unwrap();
+
+    let payload1 = sub1.await.unwrap();
+    let payload2 = sub2.await.unwrap();
+
+    assert_eq!(payload1, b"shared");
+    assert_eq!(payload2, b"shared");
+}
+
+/// 5.4: Multiple tracks — video and audio simultaneously
+#[tokio::test]
+async fn multiple_tracks() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher
+    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    publish_namespace(
+        &pub_conn,
+        TrackNamespace { fields: vec![b"example".to_vec()] },
+    ).await;
+
+    // Publisher: accept 2 SUBSCRIBEs (video + audio), send objects on each
+    let pub_conn2 = pub_conn.clone();
+    let pub_handle = tokio::spawn(async move {
+        // Accept SUBSCRIBE for video (alias=1)
+        let (mut send_v, recv_v) = pub_conn2.accept_bi().await.unwrap();
+        let mut reader_v = ControlStreamReader::new(recv_v);
+        let _ = reader_v.read_message_bytes().await.unwrap();
+        let ok_v = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let mut buf = Vec::new();
+        ok_v.encode(&mut buf);
+        send_v.write_all(&buf).await.unwrap();
+
+        // Accept SUBSCRIBE for audio (alias=2)
+        let (mut send_a, recv_a) = pub_conn2.accept_bi().await.unwrap();
+        let mut reader_a = ControlStreamReader::new(recv_a);
+        let _ = reader_a.read_message_bytes().await.unwrap();
+        let ok_a = SubscribeOkMessage { track_alias: 2, parameters: vec![] };
+        buf.clear();
+        ok_a.encode(&mut buf);
+        send_a.write_all(&buf).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Send video object
+        let mut uni_v = pub_conn2.open_uni().await.unwrap();
+        let mut data_v = Vec::new();
+        SubgroupHeader { track_alias: 1, group_id: 0 }.encode(&mut data_v);
+        ObjectHeader { object_id_delta: 0, payload_length: 5 }.encode(&mut data_v);
+        data_v.extend_from_slice(b"video");
+        uni_v.write_all(&data_v).await.unwrap();
+        uni_v.finish().unwrap();
+
+        // Send audio object
+        let mut uni_a = pub_conn2.open_uni().await.unwrap();
+        let mut data_a = Vec::new();
+        SubgroupHeader { track_alias: 2, group_id: 0 }.encode(&mut data_a);
+        ObjectHeader { object_id_delta: 0, payload_length: 5 }.encode(&mut data_a);
+        data_a.extend_from_slice(b"audio");
+        uni_a.write_all(&data_a).await.unwrap();
+        uni_a.finish().unwrap();
+
+        // PUBLISH_DONE on both
+        let done = PublishDoneMessage {
+            status_code: 0x2,
+            stream_count: 1,
+            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+        };
+        buf.clear();
+        done.encode(&mut buf);
+        send_v.write_all(&buf).await.unwrap();
+        send_a.write_all(&buf).await.unwrap();
+    });
+
+    // Subscriber: subscribe to both tracks
+    let sub_conn = connect_client(addr, cert_der).await;
+
+    // Subscribe to video
+    let (mut sub_send_v, sub_recv_v) = sub_conn.open_bi().await.unwrap();
+    let sub_v = SubscribeMessage {
+        request_id: 0,
+        required_request_id_delta: 0,
+        track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+        track_name: b"video".to_vec(),
+        parameters: vec![],
+    };
+    let mut buf = Vec::new();
+    sub_v.encode(&mut buf);
+    sub_send_v.write_all(&buf).await.unwrap();
+    let mut reader_v = ControlStreamReader::new(sub_recv_v);
+    let _ = reader_v.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
+
+    // Subscribe to audio
+    let (mut sub_send_a, sub_recv_a) = sub_conn.open_bi().await.unwrap();
+    let sub_a = SubscribeMessage {
+        request_id: 2,
+        required_request_id_delta: 0,
+        track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+        track_name: b"audio".to_vec(),
+        parameters: vec![],
+    };
+    buf.clear();
+    sub_a.encode(&mut buf);
+    sub_send_a.write_all(&buf).await.unwrap();
+    let mut reader_a = ControlStreamReader::new(sub_recv_a);
+    let _ = reader_a.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
+
+    pub_handle.await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Receive 2 uni streams (video + audio, order may vary)
+    let mut payloads: Vec<String> = Vec::new();
+    for _ in 0..2 {
+        let mut uni_recv = sub_conn.accept_uni().await.unwrap();
+        let mut all_data = Vec::new();
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            match uni_recv.read(&mut tmp).await {
+                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
+                Ok(None) => break,
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        let mut data = all_data.as_slice();
+        let _header = SubgroupHeader::decode(&mut data).unwrap();
+        let obj = ObjectHeader::decode(&mut data).unwrap();
+        let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap();
+        payloads.push(payload.to_string());
+    }
+
+    payloads.sort();
+    assert_eq!(payloads, vec!["audio", "video"]);
+}
+
+/// 6.3: Subscriber disconnect — relay cleans up, publisher continues
+#[tokio::test]
+async fn subscriber_disconnect() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    publish_namespace(
+        &pub_conn,
+        TrackNamespace { fields: vec![b"example".to_vec()] },
+    ).await;
+
+    // Publisher: accept SUBSCRIBE, respond, send objects continuously
+    let pub_conn2 = pub_conn.clone();
+    let pub_handle = tokio::spawn(async move {
+        let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let mut reader = ControlStreamReader::new(recv);
+        let _ = reader.read_message_bytes().await.unwrap();
+        let ok = SubscribeOkMessage { track_alias: 1, parameters: vec![] };
+        let mut buf = Vec::new();
+        ok.encode(&mut buf);
+        send.write_all(&buf).await.unwrap();
+
+        // Send a few groups
+        for group_id in 0u64..3 {
+            let mut uni = pub_conn2.open_uni().await.unwrap();
+            let mut data = Vec::new();
+            SubgroupHeader { track_alias: 1, group_id }.encode(&mut data);
+            ObjectHeader { object_id_delta: 0, payload_length: 4 }.encode(&mut data);
+            data.extend_from_slice(b"data");
+            uni.write_all(&data).await.unwrap();
+            uni.finish().unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        // Publisher connection should still be alive
+        assert!(!pub_conn2.close_reason().is_some(), "publisher should still be connected");
+    });
+
+    // Subscriber connects, subscribes, receives 1 group, then disconnects
+    {
+        let sub_conn = connect_client(addr, cert_der).await;
+        let (mut sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
+        let subscribe = SubscribeMessage {
+            request_id: 0,
+            required_request_id_delta: 0,
+            track_namespace: TrackNamespace { fields: vec![b"example".to_vec()] },
+            track_name: b"video".to_vec(),
+            parameters: vec![],
+        };
+        let mut buf = Vec::new();
+        subscribe.encode(&mut buf);
+        sub_send.write_all(&buf).await.unwrap();
+
+        let mut reader = ControlStreamReader::new(sub_recv);
+        let _ = reader.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
+
+        // Receive at least 1 object
+        let mut uni_recv = sub_conn.accept_uni().await.unwrap();
+        let mut tmp = vec![0u8; 4096];
+        let _ = uni_recv.read(&mut tmp).await.unwrap();
+
+        // Disconnect subscriber
+        sub_conn.close(0u32.into(), b"done");
+    }
+
+    // Publisher should complete without error
+    pub_handle.await.unwrap();
 }
