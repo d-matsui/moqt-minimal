@@ -41,8 +41,8 @@
 
 - [x] moqt-pub: 接続 → PUBLISH_NAMESPACE → SUBSCRIBE 応答 → Object 送信
 - [x] moqt-sub: 接続 → SUBSCRIBE → Object 受信
-- [ ] 結合テスト（data_transfer, relay, e2e）
+- [x] 結合テスト（multiple_groups, late_join）
 
 ## 現在のフェーズ
 
-**フェーズ 6** — moqt-pub / moqt-sub 実装済み、E2E テスト残り
+**全フェーズ完了** — 82テスト全パス
