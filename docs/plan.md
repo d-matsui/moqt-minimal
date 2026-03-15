@@ -25,8 +25,8 @@
 
 ## フェーズ 4: moqt-core — session モジュール
 
-- [ ] ControlStreamWriter / ControlStreamReader
-- [ ] RequestIdAllocator + テスト
+- [x] ControlStreamWriter / ControlStreamReader
+- [x] RequestIdAllocator + テスト
 
 ## フェーズ 5: moqt-relay
 

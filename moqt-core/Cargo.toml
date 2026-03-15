@@ -2,3 +2,7 @@
 name = "moqt-core"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+quinn = "0.11"
+tokio = { version = "1", features = ["io-util"] }
