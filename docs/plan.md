@@ -2,11 +2,11 @@
 
 ## フェーズ 1: moqt-core — wire モジュール
 
-- [ ] workspace セットアップ（Cargo.toml）
-- [ ] varint エンコード/デコード + テスト
-- [ ] Track Namespace エンコード/デコード + テスト
-- [ ] Reason Phrase エンコード/デコード + テスト
-- [ ] Key-Value-Pair (Setup Options) エンコード/デコード + テスト
+- [x] workspace セットアップ（Cargo.toml）
+- [x] varint エンコード/デコード + テスト
+- [x] Track Namespace エンコード/デコード + テスト
+- [x] Reason Phrase エンコード/デコード + テスト
+- [x] Key-Value-Pair (Setup Options) エンコード/デコード + テスト
 
 ## フェーズ 2: moqt-core — message モジュール
 
