@@ -20,8 +20,8 @@
 
 ## フェーズ 3: moqt-core — data モジュール
 
-- [ ] SUBGROUP_HEADER + テスト
-- [ ] Object fields + テスト
+- [x] SUBGROUP_HEADER + テスト
+- [x] Object fields + テスト（Object ID Delta resolution 含む）
 
 ## フェーズ 4: moqt-core — session モジュール
 
