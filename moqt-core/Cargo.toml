@@ -1,10 +1,11 @@
 [package]
 name = "moqt-core"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
-quinn = "0.11"
-rustls = { version = "0.23", features = ["ring"] }
-rustls-pki-types = "1"
-tokio = { version = "1", features = ["io-util"] }
+anyhow.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
