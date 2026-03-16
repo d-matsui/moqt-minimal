@@ -63,7 +63,7 @@ impl ControlStreamWriter {
                 },
             })
             .collect();
-        encode_key_value_pairs(&kvs, &mut payload);
+        encode_key_value_pairs(&kvs, &mut payload)?;
 
         // ペイロード長を u16 BE で書き、続けてペイロードを書く
         let len = payload.len() as u16;

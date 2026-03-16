@@ -1,20 +1,20 @@
-//! # message: MOQT 制御メッセージの定義
+//! # message: MOQT control message definitions
 //!
-//! MOQT セッション上でやり取りされる制御メッセージを定義する。
-//! 各メッセージは双方向ストリーム（bidi stream）上で送受信される。
+//! Defines the control messages exchanged over a MOQT session.
+//! Each message is sent/received on a bidirectional stream (bidi stream).
 //!
-//! ## メッセージフレーム構造
+//! ## Message frame structure
 //! ```text
-//! [メッセージタイプ (varint)] [ペイロード長 (u16 BE)] [ペイロード]
+//! [Message Type (varint)] [Payload Length (u16 BE)] [Payload]
 //! ```
-//! ペイロード長は 16-bit ビッグエンディアン固定長。varint ではない点に注意。
+//! Note: Payload Length is a fixed 16-bit big-endian integer, not a varint.
 //!
-//! ## メッセージの流れ（典型例）
-//! 1. SETUP: 接続確立時に双方が送り合う
-//! 2. PUBLISH_NAMESPACE: パブリッシャーが配信可能な名前空間を登録
-//! 3. SUBSCRIBE: サブスクライバーが特定トラックの購読を要求
-//! 4. SUBSCRIBE_OK / REQUEST_ERROR: 購読の成功/失敗を応答
-//! 5. PUBLISH_DONE: パブリッシャーが配信終了を通知
+//! ## Typical message flow
+//! 1. SETUP: Both sides exchange during connection establishment
+//! 2. PUBLISH_NAMESPACE: Publisher registers available namespaces
+//! 3. SUBSCRIBE: Subscriber requests a specific track
+//! 4. SUBSCRIBE_OK / REQUEST_ERROR: Success/failure response to subscription
+//! 5. PUBLISH_DONE: Publisher signals end of publishing
 
 pub mod parameter;
 pub mod publish_done;
@@ -29,22 +29,22 @@ use anyhow::{Result, ensure};
 
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// メッセージタイプ ID（仕様 Section 9 で定義）
+/// Message Type IDs (defined in spec Section 9)
 pub const MSG_SUBSCRIBE: u64 = 0x03;
 pub const MSG_SUBSCRIBE_OK: u64 = 0x04;
 pub const MSG_REQUEST_ERROR: u64 = 0x05;
 pub const MSG_PUBLISH_NAMESPACE: u64 = 0x06;
 pub const MSG_REQUEST_OK: u64 = 0x07;
 pub const MSG_PUBLISH_DONE: u64 = 0x0B;
-/// SETUP メッセージは特殊な Type ID（0x2F00）を持つ。
-/// コントロールストリームの識別にも使われる。
+/// SETUP message has a special Type ID (0x2F00).
+/// Also used to identify the control stream.
 pub const MSG_SETUP: u64 = 0x2F00;
 
-/// 制御メッセージフレームをエンコードする。
-/// フォーマット: [Type (varint)] [Length (u16 BE)] [Payload]
+/// Encode a control message frame.
+/// Format: [Type (varint)] [Length (u16 BE)] [Payload]
 ///
-/// Length が u16 固定長なのは、メッセージサイズの上限を明示するため。
-/// varint にしないことで、受信側が事前にバッファサイズを確定できる。
+/// Length is a fixed u16 (not varint) so the receiver can determine
+/// the buffer size in advance.
 pub fn encode_message_frame(msg_type: u64, payload: &[u8], buf: &mut Vec<u8>) {
     encode_varint(msg_type, buf);
     let len = payload.len() as u16;
@@ -52,7 +52,7 @@ pub fn encode_message_frame(msg_type: u64, payload: &[u8], buf: &mut Vec<u8>) {
     buf.extend_from_slice(payload);
 }
 
-/// 制御メッセージフレームヘッダーをデコードし、(メッセージタイプ, ペイロード) を返す。
+/// Decode a control message frame header, returning (message type, payload).
 pub fn decode_message_header(buf: &mut &[u8]) -> Result<(u64, Vec<u8>)> {
     let msg_type = decode_varint(buf)?;
     ensure!(buf.len() >= 2, "need 2 bytes for message length");

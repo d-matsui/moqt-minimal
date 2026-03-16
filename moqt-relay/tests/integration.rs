@@ -77,7 +77,7 @@ async fn connect_client(
         ],
     };
     let mut buf = Vec::new();
-    setup.encode(&mut buf);
+    setup.encode(&mut buf).unwrap();
     ctrl_send.write_all(&buf).await.unwrap();
 
     // Accept relay's control stream and read SETUP
@@ -127,7 +127,7 @@ async fn session_setup() {
                 setup_options: vec![],
             };
             let mut buf = Vec::new();
-            setup.encode(&mut buf);
+            setup.encode(&mut buf).unwrap();
             ctrl.write_all(&buf).await.unwrap();
             // Accept peer's SETUP
             let recv = conn.accept_uni().await.unwrap();

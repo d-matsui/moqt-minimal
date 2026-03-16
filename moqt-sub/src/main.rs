@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
         ],
     };
     let mut buf = Vec::new();
-    setup.encode(&mut buf);
+    setup.encode(&mut buf)?;
     ctrl_send.write_all(&buf).await?;
 
     let recv = connection.accept_uni().await?;

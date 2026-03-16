@@ -160,7 +160,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
         setup_options: vec![],
     };
     let mut setup_buf = Vec::new();
-    server_setup.encode(&mut setup_buf);
+    server_setup.encode(&mut setup_buf)?;
     our_ctrl_send.write_all(&setup_buf).await?;
 
     // クライアントからサーバーへ: SETUP を受信

@@ -45,7 +45,7 @@ impl SetupMessage {
     /// SETUP メッセージをエンコードする。
     /// Setup Options を Key-Value-Pair としてエンコードし、
     /// メッセージフレーム（Type + Length + Payload）で包む。
-    pub fn encode(&self, buf: &mut Vec<u8>) {
+    pub fn encode(&self, buf: &mut Vec<u8>) -> Result<()> {
         // SetupOption を KeyValuePair に変換
         let kvs: Vec<KeyValuePair> = self
             .setup_options
@@ -67,8 +67,9 @@ impl SetupMessage {
             .collect();
 
         let mut payload = Vec::new();
-        encode_key_value_pairs(&kvs, &mut payload);
+        encode_key_value_pairs(&kvs, &mut payload)?;
         encode_message_frame(MSG_SETUP, &payload, buf);
+        Ok(())
     }
 
     /// バイト列から SETUP メッセージをデコードする。
@@ -119,7 +120,7 @@ mod tests {
 
     fn roundtrip(msg: &SetupMessage) {
         let mut buf = Vec::new();
-        msg.encode(&mut buf);
+        msg.encode(&mut buf).unwrap();
         let mut slice = buf.as_slice();
         let decoded = SetupMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, &decoded);
@@ -169,7 +170,7 @@ mod tests {
             setup_options: vec![],
         };
         let mut buf = Vec::new();
-        msg.encode(&mut buf);
+        msg.encode(&mut buf).unwrap();
         // 0x2F00 as varint: 2 bytes (10 prefix), value = 0x2F00
         // First byte: 0x80 | (0x2F00 >> 8) = 0x80 | 0x2F = 0xAF
         // Second byte: 0x00
