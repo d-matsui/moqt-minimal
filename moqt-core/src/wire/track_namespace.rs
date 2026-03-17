@@ -1,43 +1,58 @@
-//! # track_namespace: MOQT トラック名前空間
+//! # track_namespace: MOQT track namespace (Section 1.5)
 //!
-//! トラック名前空間は、パブリッシャーが配信するメディアストリームを識別するための
-//! 階層的な名前構造。0〜32個のフィールド（各フィールドは1バイト以上のバイト列）で構成される。
+//! A track namespace is a hierarchical name structure used to identify
+//! media streams published by a publisher. It consists of 0 to 32 fields,
+//! each being a byte sequence of at least 1 byte.
 //!
-//! 例: `["example", "live"]` のような2フィールドの名前空間で、
-//! パブリッシャーの配信先を一意に特定できる。
+//! Example: `["example", "live"]` — a 2-field namespace. Combined with
+//! a Track Name, it forms a Full Track Name that identifies a track.
 //!
-//! ## ワイヤーフォーマット
+//! ## Wire format
 //! ```text
-//! [フィールド数 (varint)] [フィールド1の長さ (varint)] [フィールド1のデータ] ...
+//! Number of Fields (vi64),
+//! [Field Length (vi64), Field Value (..)] ...
 //! ```
 
 use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
-/// トラック名前空間: 0〜32個のバイト列フィールドの順序付きリスト。
-/// Hash トレイトを実装しているので、HashMap のキーとして使える。
-/// これはリレーサーバーでパブリッシャーの検索に利用される。
+/// Track namespace: an ordered list of 0 to 32 byte-sequence fields.
+/// Implements Hash so it can be used as a HashMap key.
+/// This is used by the relay server to look up publishers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrackNamespace {
     pub fields: Vec<Vec<u8>>,
 }
 
-/// 仕様上のフィールド数の上限。DoS 攻撃防止のために制限している。
+/// Maximum number of fields per the spec. Limits DoS attack surface.
 const MAX_FIELDS: u64 = 32;
 
-/// トラック名前空間をバイト列にエンコードする。
-/// フォーマット: [フィールド数] [各フィールドの長さ + データ]...
-pub fn encode_track_namespace(ns: &TrackNamespace, buf: &mut Vec<u8>) {
+/// Encode a track namespace into bytes
+///
+/// ```text
+/// Number of Fields (vi64),
+/// [Field Length (vi64), Field Value (..)] ...
+/// ```
+///
+/// An empty namespace (0 fields) is valid and encodes as a single byte `0x00`.
+pub fn encode_track_namespace(ns: &TrackNamespace, buf: &mut Vec<u8>) -> Result<()> {
+    ensure!(
+        ns.fields.len() as u64 <= MAX_FIELDS,
+        "too many namespace fields: {} (max {MAX_FIELDS})",
+        ns.fields.len()
+    );
     encode_varint(ns.fields.len() as u64, buf);
     for field in &ns.fields {
+        ensure!(!field.is_empty(), "namespace field must not be empty");
         encode_varint(field.len() as u64, buf);
         buf.extend_from_slice(field);
     }
+    Ok(())
 }
 
-/// バイト列からトラック名前空間をデコードする。
-/// フィールド数が上限を超えたり、フィールド長が0の場合はエラーを返す。
+/// Decode a track namespace from bytes
+/// Returns an error if the field count exceeds the limit or a field length is 0.
 pub fn decode_track_namespace(buf: &mut &[u8]) -> Result<TrackNamespace> {
     let num_fields = decode_varint(buf)?;
     ensure!(
@@ -48,8 +63,9 @@ pub fn decode_track_namespace(buf: &mut &[u8]) -> Result<TrackNamespace> {
     let mut fields = Vec::with_capacity(num_fields as usize);
     for _ in 0..num_fields {
         let field_len = decode_varint(buf)?;
-        // 仕様により各フィールドは最低1バイト必要
+        // Each field must be at least 1 byte per the spec
         ensure!(field_len > 0, "namespace field length must be at least 1");
+        // Cast to usize for slice indexing
         let field_len = field_len as usize;
         ensure!(
             buf.len() >= field_len,
@@ -69,26 +85,26 @@ mod tests {
 
     fn roundtrip(ns: &TrackNamespace) {
         let mut buf = Vec::new();
-        encode_track_namespace(ns, &mut buf);
+        encode_track_namespace(ns, &mut buf).unwrap();
         let mut slice = buf.as_slice();
         let decoded = decode_track_namespace(&mut slice).unwrap();
         assert_eq!(ns, &decoded);
         assert!(slice.is_empty(), "all bytes should be consumed");
     }
 
-    // 1.2: フィールド数0
+    // 0 fields
     #[test]
     fn empty_namespace() {
         let ns = TrackNamespace { fields: vec![] };
         roundtrip(&ns);
 
         let mut buf = Vec::new();
-        encode_track_namespace(&ns, &mut buf);
+        encode_track_namespace(&ns, &mut buf).unwrap();
         // Number of Fields = 0 (1 byte varint)
         assert_eq!(buf, vec![0x00]);
     }
 
-    // 1.2: フィールド数1
+    // 1 field
     #[test]
     fn single_field() {
         let ns = TrackNamespace {
@@ -97,7 +113,7 @@ mod tests {
         roundtrip(&ns);
     }
 
-    // 1.2: 複数フィールド
+    // Multiple fields
     #[test]
     fn multiple_fields() {
         let ns = TrackNamespace {
@@ -106,7 +122,7 @@ mod tests {
         roundtrip(&ns);
     }
 
-    // バイナリフィールド値
+    // Binary field value
     #[test]
     fn binary_field_value() {
         let ns = TrackNamespace {
@@ -115,7 +131,36 @@ mod tests {
         roundtrip(&ns);
     }
 
-    // デコード: フィールド長0はエラー
+    // 32 fields is OK
+    #[test]
+    fn encode_32_fields_ok() {
+        let ns = TrackNamespace {
+            fields: (0..32).map(|i| vec![b'a' + (i % 26) as u8]).collect(),
+        };
+        roundtrip(&ns);
+    }
+
+    // Encode: 33 fields is an error
+    #[test]
+    fn encode_too_many_fields_is_error() {
+        let ns = TrackNamespace {
+            fields: (0..33).map(|i| vec![b'a' + (i % 26) as u8]).collect(),
+        };
+        let mut buf = Vec::new();
+        assert!(encode_track_namespace(&ns, &mut buf).is_err());
+    }
+
+    // Encode: empty field is an error
+    #[test]
+    fn encode_empty_field_is_error() {
+        let ns = TrackNamespace {
+            fields: vec![vec![]],
+        };
+        let mut buf = Vec::new();
+        assert!(encode_track_namespace(&ns, &mut buf).is_err());
+    }
+
+    // Decode: field length 0 is an error
     #[test]
     fn decode_zero_length_field_is_error() {
         // Number of Fields = 1, Field Length = 0
@@ -124,7 +169,7 @@ mod tests {
         assert!(decode_track_namespace(&mut slice).is_err());
     }
 
-    // デコード: 33フィールド以上はエラー
+    // Decode: 33 or more fields is an error
     #[test]
     fn decode_too_many_fields_is_error() {
         let mut buf = Vec::new();
@@ -137,19 +182,10 @@ mod tests {
         assert!(decode_track_namespace(&mut slice).is_err());
     }
 
-    // 32フィールドはOK
+    // Decode: truncated buffer
     #[test]
-    fn decode_32_fields_ok() {
-        let ns = TrackNamespace {
-            fields: (0..32).map(|i| vec![b'a' + (i % 26) as u8]).collect(),
-        };
-        roundtrip(&ns);
-    }
-
-    // デコード: バッファ不足
-    #[test]
-    fn decode_truncated() {
-        // Number of Fields = 1, Field Length = 5 だがデータが足りない
+    fn decode_truncated_is_error() {
+        // Number of Fields = 1, Field Length = 5 but only 2 bytes of data
         let data = vec![0x01, 0x05, 0x41, 0x42];
         let mut slice = data.as_slice();
         assert!(decode_track_namespace(&mut slice).is_err());

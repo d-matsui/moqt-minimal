@@ -1,35 +1,36 @@
-//! # reason_phrase: エラー理由などの長さ付き文字列
+//! # reason_phrase: Length-prefixed string for error reasons, etc. (Section 1.4.4)
 //!
-//! REQUEST_ERROR や PUBLISH_DONE メッセージに含まれる、
-//! 人間が読めるエラー理由の文字列。UTF-8 バイト列として表現される。
+//! A human-readable reason string included in REQUEST_ERROR and PUBLISH_DONE
+//! messages. Represented as a UTF-8 byte sequence.
 //!
-//! ## ワイヤーフォーマット
+//! ## Wire format
 //! ```text
-//! [長さ (varint)] [UTF-8 バイト列]
+//! Reason Phrase Length (vi64),
+//! Reason Phrase Value (..)
 //! ```
-//! 最大長は 1024 バイト。空文字列（長さ0）も許容される。
+//! Maximum length is 1024 bytes. Empty strings (length 0) are allowed.
 
 use anyhow::{Result, ensure};
 
 use super::varint::{decode_varint, encode_varint};
 
-/// Reason Phrase の最大バイト長。過大なデータの受信を防ぐ。
+/// Maximum byte length for Reason Phrase. Prevents oversized data.
 const MAX_LENGTH: u64 = 1024;
 
-/// 長さ付き UTF-8 文字列。エラー理由や終了理由を表す。
+/// A length-prefixed UTF-8 string representing an error or termination reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReasonPhrase {
     pub value: Vec<u8>,
 }
 
-/// ReasonPhrase をバイト列にエンコードする。
+/// Encode a ReasonPhrase into bytes.
 pub fn encode_reason_phrase(rp: &ReasonPhrase, buf: &mut Vec<u8>) {
     encode_varint(rp.value.len() as u64, buf);
     buf.extend_from_slice(&rp.value);
 }
 
-/// バイト列から ReasonPhrase をデコードする。
-/// 長さが MAX_LENGTH を超える場合はエラーを返す。
+/// Decode a ReasonPhrase from bytes.
+/// Returns an error if the length exceeds MAX_LENGTH.
 pub fn decode_reason_phrase(buf: &mut &[u8]) -> Result<ReasonPhrase> {
     let len = decode_varint(buf)?;
     ensure!(
@@ -60,7 +61,7 @@ mod tests {
         assert!(slice.is_empty());
     }
 
-    // 1.3: 空の reason phrase
+    // Empty reason phrase
     #[test]
     fn empty() {
         let rp = ReasonPhrase { value: vec![] };
@@ -71,7 +72,7 @@ mod tests {
         assert_eq!(buf, vec![0x00]);
     }
 
-    // 1.3: UTF-8 文字列
+    // UTF-8 string
     #[test]
     fn utf8_string() {
         let rp = ReasonPhrase {
@@ -80,7 +81,7 @@ mod tests {
         roundtrip(&rp);
     }
 
-    // 1024バイトちょうどはOK
+    // 1024 bytes is OK
     #[test]
     fn max_length_ok() {
         let rp = ReasonPhrase {
@@ -89,7 +90,7 @@ mod tests {
         roundtrip(&rp);
     }
 
-    // 1025バイトはエラー
+    // 1025 bytes is an error
     #[test]
     fn too_long_is_error() {
         let mut buf = Vec::new();
@@ -99,9 +100,9 @@ mod tests {
         assert!(decode_reason_phrase(&mut slice).is_err());
     }
 
-    // バッファ不足
+    // Truncated buffer
     #[test]
-    fn truncated() {
+    fn truncated_is_error() {
         let mut buf = Vec::new();
         encode_varint(10, &mut buf);
         buf.extend_from_slice(b"short");

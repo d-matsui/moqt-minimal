@@ -551,7 +551,7 @@ async fn handle_subscribe(
         parameters: msg.parameters.clone(),
     };
     let mut buf = Vec::new();
-    upstream_subscribe.encode(&mut buf);
+    upstream_subscribe.encode(&mut buf)?;
     pub_send.write_all(&buf).await?;
 
     // === SUBSCRIBE_OK の受信と転送 ===

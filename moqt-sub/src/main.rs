@@ -99,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
         )],
     };
     buf.clear();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf)?;
     sub_send.write_all(&buf).await?;
     if !pipe_mode {
         eprintln!("Sent SUBSCRIBE.");

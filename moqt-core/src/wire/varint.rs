@@ -168,7 +168,7 @@ mod tests {
         assert!(slice.is_empty(), "all bytes should be consumed");
     }
 
-    // 1.1: 1-byte values (0..=127)
+    // 1-byte values (0..=127)
     #[test]
     fn encode_decode_1byte() {
         roundtrip(0);
@@ -177,7 +177,7 @@ mod tests {
         roundtrip(127);
     }
 
-    // 1.1: 2-byte values (128..=16383)
+    // 2-byte values (128..=16383)
     #[test]
     fn encode_decode_2byte() {
         roundtrip(128);
@@ -185,14 +185,14 @@ mod tests {
         roundtrip(16383);
     }
 
-    // 1.1: 3-byte values
+    // 3-byte values
     #[test]
     fn encode_decode_3byte() {
         roundtrip(16384);
         roundtrip(2097151);
     }
 
-    // 1.1: 4-byte values
+    // 4-byte values
     #[test]
     fn encode_decode_4byte() {
         roundtrip(2097152);
@@ -230,7 +230,7 @@ mod tests {
         roundtrip(u64::MAX);
     }
 
-    // 1.1: Byte sequence matches the spec examples
+    // Byte sequence matches the spec examples
     #[test]
     fn spec_example_37() {
         let mut buf = Vec::new();
@@ -280,7 +280,7 @@ mod tests {
         );
     }
 
-    // 1.1: Values are encoded in the minimum number of bytes
+    // Values are encoded in the minimum number of bytes
     #[test]
     fn minimal_encoding_length() {
         let cases: Vec<(u64, usize)> = vec![
@@ -322,21 +322,21 @@ mod tests {
 
     // Decode: empty buffer
     #[test]
-    fn decode_empty_buffer() {
+    fn decode_empty_buffer_is_error() {
         let mut slice: &[u8] = &[];
         assert!(decode_varint(&mut slice).is_err());
     }
 
     // Decode: truncated buffer (needs 2 bytes but only 1 available)
     #[test]
-    fn decode_truncated_buffer() {
+    fn decode_truncated_buffer_is_error() {
         let mut slice: &[u8] = &[0x80]; // needs 2 bytes
         assert!(decode_varint(&mut slice).is_err());
     }
 
     // Decode: invalid code point 0xFC (11111100)
     #[test]
-    fn decode_invalid_codepoint() {
+    fn decode_invalid_codepoint_is_error() {
         let mut slice: &[u8] = &[0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         assert!(decode_varint(&mut slice).is_err());
     }

@@ -28,14 +28,15 @@ pub struct PublishNamespaceMessage {
 }
 
 impl PublishNamespaceMessage {
-    pub fn encode(&self, buf: &mut Vec<u8>) {
+    pub fn encode(&self, buf: &mut Vec<u8>) -> Result<()> {
         let mut payload = Vec::new();
         encode_varint(self.request_id, &mut payload);
         encode_varint(self.required_request_id_delta, &mut payload);
-        encode_track_namespace(&self.track_namespace, &mut payload);
+        encode_track_namespace(&self.track_namespace, &mut payload)?;
         // パラメータ数 = 0（最小実装）
         encode_varint(0, &mut payload);
         encode_message_frame(MSG_PUBLISH_NAMESPACE, &payload, buf);
+        Ok(())
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
@@ -75,7 +76,7 @@ mod tests {
             },
         };
         let mut buf = Vec::new();
-        msg.encode(&mut buf);
+        msg.encode(&mut buf).unwrap();
         let mut slice = buf.as_slice();
         let decoded = PublishNamespaceMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);
@@ -90,7 +91,7 @@ mod tests {
             track_namespace: TrackNamespace { fields: vec![] },
         };
         let mut buf = Vec::new();
-        msg.encode(&mut buf);
+        msg.encode(&mut buf).unwrap();
         let mut slice = buf.as_slice();
         let decoded = PublishNamespaceMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);

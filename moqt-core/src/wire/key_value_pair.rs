@@ -34,7 +34,7 @@ pub enum KvValue {
     Bytes(Vec<u8>),
 }
 
-/// Encode a list of key-value pairs (Section 1.4.3).
+/// Encode a list of key-value pairs.
 /// Pairs must be in ascending Type order.
 /// Each pair's Type is delta-encoded (difference from the previous pair).
 ///
@@ -91,7 +91,7 @@ pub fn encode_key_value_pairs(pairs: &[KeyValuePair], buf: &mut Vec<u8>) -> Resu
     Ok(())
 }
 
-/// Decode key-value pairs until the buffer is empty (Section 1.4.3).
+/// Decode key-value pairs until the buffer is empty.
 /// Accumulates deltas to restore absolute Type IDs.
 pub fn decode_key_value_pairs(buf: &mut &[u8]) -> Result<Vec<KeyValuePair>> {
     let mut pairs = Vec::new();
@@ -147,7 +147,7 @@ mod tests {
         assert!(slice.is_empty());
     }
 
-    // 1.4: Even Type (varint value)
+    // Even Type (varint value)
     #[test]
     fn even_type_varint() {
         let pairs = vec![KeyValuePair {
@@ -157,7 +157,7 @@ mod tests {
         roundtrip(&pairs);
     }
 
-    // 1.4: Odd Type (length-prefixed bytes)
+    // Odd Type (length-prefixed bytes)
     #[test]
     fn odd_type_bytes() {
         let pairs = vec![KeyValuePair {
@@ -167,7 +167,7 @@ mod tests {
         roundtrip(&pairs);
     }
 
-    // 1.4: Delta Type is computed correctly
+    // Delta Type is computed correctly
     #[test]
     fn delta_encoding() {
         let pairs = vec![

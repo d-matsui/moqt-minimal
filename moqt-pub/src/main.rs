@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
         track_namespace: ns.clone(),
     };
     buf.clear();
-    pub_ns.encode(&mut buf);
+    pub_ns.encode(&mut buf)?;
     ns_send.write_all(&buf).await?;
 
     let mut ns_reader = ControlStreamReader::new(ns_recv);

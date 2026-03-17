@@ -97,7 +97,7 @@ async fn publish_namespace(conn: &quinn::Connection, namespace: TrackNamespace) 
         track_namespace: namespace,
     };
     let mut buf = Vec::new();
-    msg.encode(&mut buf);
+    msg.encode(&mut buf).unwrap();
     send.write_all(&buf).await.unwrap();
 
     let mut reader = ControlStreamReader::new(recv);
@@ -224,7 +224,7 @@ async fn subscribe_via_relay() {
         )],
     };
     let mut buf = Vec::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
     // Read SUBSCRIBE_OK
@@ -314,7 +314,7 @@ async fn object_forwarding() {
         parameters: vec![],
     };
     let mut buf = Vec::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
     // Read SUBSCRIBE_OK
@@ -439,7 +439,7 @@ async fn publish_done_forwarding() {
         parameters: vec![],
     };
     let mut buf = Vec::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
     // Read SUBSCRIBE_OK
@@ -538,7 +538,7 @@ async fn multiple_groups() {
         parameters: vec![],
     };
     let mut buf = Vec::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
     let mut sub_reader = ControlStreamReader::new(sub_recv);
@@ -686,7 +686,7 @@ async fn late_join() {
         )],
     };
     let mut buf = Vec::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
     let mut sub_reader = ControlStreamReader::new(sub_recv);
@@ -772,7 +772,7 @@ async fn subscribe_unknown_namespace() {
         parameters: vec![],
     };
     let mut buf = Vec::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
     // Should receive REQUEST_ERROR
@@ -879,7 +879,7 @@ async fn multiple_subscribers() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        subscribe.encode(&mut buf);
+        subscribe.encode(&mut buf).unwrap();
         sub_send.write_all(&buf).await.unwrap();
 
         let mut reader = ControlStreamReader::new(sub_recv);
@@ -1028,7 +1028,7 @@ async fn multiple_tracks() {
         parameters: vec![],
     };
     let mut buf = Vec::new();
-    sub_v.encode(&mut buf);
+    sub_v.encode(&mut buf).unwrap();
     sub_send_v.write_all(&buf).await.unwrap();
     let mut reader_v = ControlStreamReader::new(sub_recv_v);
     let _ = reader_v.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
@@ -1045,7 +1045,7 @@ async fn multiple_tracks() {
         parameters: vec![],
     };
     buf.clear();
-    sub_a.encode(&mut buf);
+    sub_a.encode(&mut buf).unwrap();
     sub_send_a.write_all(&buf).await.unwrap();
     let mut reader_a = ControlStreamReader::new(sub_recv_a);
     let _ = reader_a.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
@@ -1151,7 +1151,7 @@ async fn subscriber_disconnect() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        subscribe.encode(&mut buf);
+        subscribe.encode(&mut buf).unwrap();
         sub_send.write_all(&buf).await.unwrap();
 
         let mut reader = ControlStreamReader::new(sub_recv);

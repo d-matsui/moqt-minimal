@@ -42,16 +42,17 @@ pub struct SubscribeMessage {
 }
 
 impl SubscribeMessage {
-    pub fn encode(&self, buf: &mut Vec<u8>) {
+    pub fn encode(&self, buf: &mut Vec<u8>) -> Result<()> {
         let mut payload = Vec::new();
         encode_varint(self.request_id, &mut payload);
         encode_varint(self.required_request_id_delta, &mut payload);
-        encode_track_namespace(&self.track_namespace, &mut payload);
+        encode_track_namespace(&self.track_namespace, &mut payload)?;
         // Track Name は長さ付きバイト列
         encode_varint(self.track_name.len() as u64, &mut payload);
         payload.extend_from_slice(&self.track_name);
         encode_parameters(&self.parameters, &mut payload);
         encode_message_frame(MSG_SUBSCRIBE, &payload, buf);
+        Ok(())
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
@@ -86,7 +87,7 @@ mod tests {
 
     fn roundtrip(msg: &SubscribeMessage) {
         let mut buf = Vec::new();
-        msg.encode(&mut buf);
+        msg.encode(&mut buf).unwrap();
         let mut slice = buf.as_slice();
         let decoded = SubscribeMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, &decoded);
