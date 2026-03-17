@@ -1,52 +1,53 @@
-//! # setup: SETUP メッセージ
+//! # setup: SETUP message (Section 9.4)
 //!
-//! MOQT 接続の最初に、クライアントとサーバーが互いに送り合うメッセージ。
-//! 接続パラメータ（PATH, AUTHORITY 等）を Setup Options として含む。
+//! The first message exchanged between client and server to establish a MOQT session.
+//! Contains connection parameters (PATH, AUTHORITY, etc.) as Setup Options.
 //!
-//! ## プロトコルフロー
-//! 1. クライアント → サーバー: SETUP（PATH="/", AUTHORITY="localhost" 等）
-//! 2. サーバー → クライアント: SETUP（通常は空の Options）
+//! ## Protocol flow
+//! 1. Client -> Server: SETUP (with PATH="/", AUTHORITY="localhost", etc.)
+//! 2. Server -> Client: SETUP (typically with empty Options)
 //!
-//! ## ワイヤーフォーマット
-//! SETUP メッセージの Type ID は 0x2F00 で、コントロールストリームの
-//! ストリームタイプとしても使われる。ペイロードは Key-Value-Pair のリスト。
+//! ## Wire format
+//! SETUP has a special Type ID of 0x2F00, which is also used as the
+//! control stream type. The payload is a list of Key-Value-Pairs.
 
 use anyhow::{Result, ensure};
 
-use super::{MSG_SETUP, decode_message_header, encode_message_frame};
+use super::{MSG_SETUP, decode_message, encode_message};
 use crate::wire::key_value_pair::{
     KeyValuePair, KvValue, decode_key_value_pairs, encode_key_value_pairs,
 };
 
-/// Setup Option の既知の Type ID
+/// Known Setup Option Type IDs
 const OPTION_PATH: u64 = 0x01;
 const OPTION_AUTHORITY: u64 = 0x05;
 
-/// SETUP メッセージ。接続時に双方が交換する。
+/// SETUP message. Exchanged by both sides during session establishment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupMessage {
     pub setup_options: Vec<SetupOption>,
 }
 
-/// Setup Option の種類。
-/// PATH と AUTHORITY は仕様で定義された標準オプション。
-/// 未知のオプションは Unknown として保持し、将来の拡張に備える。
+/// Setup Option types.
+/// PATH and AUTHORITY are standard options defined in the spec.
+/// Unknown options are preserved for forward compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetupOption {
-    /// WebTransport の PATH に相当。接続先のパスを指定。
+    /// Path of the MoQ URI (Option Type 0x01).
     Path(Vec<u8>),
-    /// 接続先のホスト名を指定。
+    /// Authority component of the MoQ URI (Option Type 0x05).
     Authority(Vec<u8>),
-    /// 未知のオプション。後方互換性のために保持する。
+    /// Unknown option. The spec requires receivers to ignore unrecognized options,
+    /// so we preserve them without error.
     Unknown { type_id: u64, value: KvValue },
 }
 
 impl SetupMessage {
-    /// SETUP メッセージをエンコードする。
-    /// Setup Options を Key-Value-Pair としてエンコードし、
-    /// メッセージフレーム（Type + Length + Payload）で包む。
+    /// Encode a SETUP message.
+    /// Converts Setup Options to Key-Value-Pairs and wraps them
+    /// in a control message (Type + Length + Payload).
     pub fn encode(&self, buf: &mut Vec<u8>) -> Result<()> {
-        // SetupOption を KeyValuePair に変換
+        // Convert SetupOptions to KeyValuePairs
         let kvs: Vec<KeyValuePair> = self
             .setup_options
             .iter()
@@ -68,14 +69,14 @@ impl SetupMessage {
 
         let mut payload = Vec::new();
         encode_key_value_pairs(&kvs, &mut payload)?;
-        encode_message_frame(MSG_SETUP, &payload, buf);
+        encode_message(MSG_SETUP, &payload, buf);
         Ok(())
     }
 
-    /// バイト列から SETUP メッセージをデコードする。
-    /// メッセージタイプが MSG_SETUP でなければエラーを返す。
+    /// Decode a SETUP message from bytes.
+    /// Returns an error if the message type is not MSG_SETUP.
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let (msg_type, payload) = decode_message_header(buf)?;
+        let (msg_type, payload) = decode_message(buf)?;
         ensure!(
             msg_type == MSG_SETUP,
             "expected SETUP (0x{MSG_SETUP:X}), got 0x{msg_type:X}"
@@ -84,8 +85,8 @@ impl SetupMessage {
         let mut payload_slice = payload.as_slice();
         let kvs = decode_key_value_pairs(&mut payload_slice)?;
 
-        // 既知の Type ID は対応する SetupOption に変換し、
-        // 未知のものは Unknown として保持する
+        // Convert known Type IDs to SetupOption variants,
+        // preserve unknown ones as Unknown
         let setup_options = kvs
             .into_iter()
             .map(|kv| match kv.type_id {
@@ -127,7 +128,7 @@ mod tests {
         assert!(slice.is_empty());
     }
 
-    // 2.1: client の SETUP（PATH, AUTHORITY 付き）
+    // Client SETUP with PATH and AUTHORITY
     #[test]
     fn client_setup_with_path_and_authority() {
         let msg = SetupMessage {
@@ -139,7 +140,7 @@ mod tests {
         roundtrip(&msg);
     }
 
-    // 2.1: server の SETUP（Setup Options 空）
+    // Server SETUP with empty options
     #[test]
     fn server_setup_empty_options() {
         let msg = SetupMessage {
@@ -148,7 +149,7 @@ mod tests {
         roundtrip(&msg);
     }
 
-    // 2.1: 未知の Setup Option を無視してパースが継続できる
+    // Unknown Setup Option is preserved through roundtrip
     #[test]
     fn unknown_option_preserved() {
         let msg = SetupMessage {
@@ -163,7 +164,7 @@ mod tests {
         roundtrip(&msg);
     }
 
-    // メッセージフレーム: Type = 0x2F00 がワイヤ上で正しくエンコードされる
+    // Type ID 0x2F00 is correctly encoded on wire
     #[test]
     fn message_type_on_wire() {
         let msg = SetupMessage {
@@ -171,18 +172,18 @@ mod tests {
         };
         let mut buf = Vec::new();
         msg.encode(&mut buf).unwrap();
-        // 0x2F00 as varint: 2 bytes (10 prefix), value = 0x2F00
-        // First byte: 0x80 | (0x2F00 >> 8) = 0x80 | 0x2F = 0xAF
-        // Second byte: 0x00
+        // 0x2F00 as varint: 2 bytes (prefix 10), value = 0x2F00
+        // 1st byte: 0x80 | (0x2F00 >> 8) = 0x80 | 0x2F = 0xAF
+        // 2nd byte: 0x00
         assert_eq!(buf[0], 0xAF);
         assert_eq!(buf[1], 0x00);
     }
 
-    // デコード: 間違った message type
+    // Wrong message type is an error
     #[test]
-    fn wrong_message_type() {
+    fn wrong_message_type_is_error() {
         let mut buf = Vec::new();
-        encode_message_frame(0x03, &[], &mut buf); // SUBSCRIBE type, not SETUP
+        encode_message(0x03, &[], &mut buf); // SUBSCRIBE type, not SETUP
         let mut slice = buf.as_slice();
         assert!(SetupMessage::decode(&mut slice).is_err());
     }

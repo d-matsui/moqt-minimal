@@ -20,7 +20,7 @@
 use anyhow::{Result, ensure};
 
 use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
-use super::{MSG_SUBSCRIBE, decode_message_header, encode_message_frame};
+use super::{MSG_SUBSCRIBE, decode_message, encode_message};
 use crate::wire::track_namespace::{
     TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
@@ -51,12 +51,12 @@ impl SubscribeMessage {
         encode_varint(self.track_name.len() as u64, &mut payload);
         payload.extend_from_slice(&self.track_name);
         encode_parameters(&self.parameters, &mut payload);
-        encode_message_frame(MSG_SUBSCRIBE, &payload, buf);
+        encode_message(MSG_SUBSCRIBE, &payload, buf);
         Ok(())
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let (msg_type, payload) = decode_message_header(buf)?;
+        let (msg_type, payload) = decode_message(buf)?;
         ensure!(
             msg_type == MSG_SUBSCRIBE,
             "expected SUBSCRIBE (0x{MSG_SUBSCRIBE:X}), got 0x{msg_type:X}"

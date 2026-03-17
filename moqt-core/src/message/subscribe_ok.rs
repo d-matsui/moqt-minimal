@@ -14,7 +14,7 @@
 use anyhow::{Result, ensure};
 
 use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
-use super::{MSG_SUBSCRIBE_OK, decode_message_header, encode_message_frame};
+use super::{MSG_SUBSCRIBE_OK, decode_message, encode_message};
 use crate::wire::varint::{decode_varint, encode_varint};
 
 /// SUBSCRIBE_OK メッセージ。購読の成功応答。
@@ -37,11 +37,11 @@ impl SubscribeOkMessage {
         encode_parameters(&self.parameters, &mut payload);
         // Track Properties: 最小実装では空（長さ 0）
         encode_varint(0, &mut payload);
-        encode_message_frame(MSG_SUBSCRIBE_OK, &payload, buf);
+        encode_message(MSG_SUBSCRIBE_OK, &payload, buf);
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let (msg_type, payload) = decode_message_header(buf)?;
+        let (msg_type, payload) = decode_message(buf)?;
         ensure!(
             msg_type == MSG_SUBSCRIBE_OK,
             "expected SUBSCRIBE_OK (0x{MSG_SUBSCRIBE_OK:X}), got 0x{msg_type:X}"

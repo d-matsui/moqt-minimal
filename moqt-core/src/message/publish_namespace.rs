@@ -10,7 +10,7 @@
 
 use anyhow::{Result, ensure};
 
-use super::{MSG_PUBLISH_NAMESPACE, decode_message_header, encode_message_frame};
+use super::{MSG_PUBLISH_NAMESPACE, decode_message, encode_message};
 use crate::wire::track_namespace::{
     TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
@@ -35,12 +35,12 @@ impl PublishNamespaceMessage {
         encode_track_namespace(&self.track_namespace, &mut payload)?;
         // パラメータ数 = 0（最小実装）
         encode_varint(0, &mut payload);
-        encode_message_frame(MSG_PUBLISH_NAMESPACE, &payload, buf);
+        encode_message(MSG_PUBLISH_NAMESPACE, &payload, buf);
         Ok(())
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let (msg_type, payload) = decode_message_header(buf)?;
+        let (msg_type, payload) = decode_message(buf)?;
         ensure!(
             msg_type == MSG_PUBLISH_NAMESPACE,
             "expected PUBLISH_NAMESPACE (0x{MSG_PUBLISH_NAMESPACE:X}), got 0x{msg_type:X}"

@@ -5,7 +5,7 @@
 
 use anyhow::{Result, ensure};
 
-use super::{MSG_REQUEST_OK, decode_message_header, encode_message_frame};
+use super::{MSG_REQUEST_OK, decode_message, encode_message};
 use crate::wire::varint::{decode_varint, encode_varint};
 
 /// REQUEST_OK メッセージ。リクエストの成功を示す。
@@ -18,11 +18,11 @@ impl RequestOkMessage {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         let mut payload = Vec::new();
         encode_varint(0, &mut payload); // パラメータ数 = 0
-        encode_message_frame(MSG_REQUEST_OK, &payload, buf);
+        encode_message(MSG_REQUEST_OK, &payload, buf);
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let (msg_type, payload) = decode_message_header(buf)?;
+        let (msg_type, payload) = decode_message(buf)?;
         ensure!(
             msg_type == MSG_REQUEST_OK,
             "expected REQUEST_OK (0x{MSG_REQUEST_OK:X}), got 0x{msg_type:X}"

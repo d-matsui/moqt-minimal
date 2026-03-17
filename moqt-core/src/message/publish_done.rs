@@ -9,7 +9,7 @@
 
 use anyhow::{Result, ensure};
 
-use super::{MSG_PUBLISH_DONE, decode_message_header, encode_message_frame};
+use super::{MSG_PUBLISH_DONE, decode_message, encode_message};
 use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
@@ -30,11 +30,11 @@ impl PublishDoneMessage {
         encode_varint(self.status_code, &mut payload);
         encode_varint(self.stream_count, &mut payload);
         encode_reason_phrase(&self.reason_phrase, &mut payload);
-        encode_message_frame(MSG_PUBLISH_DONE, &payload, buf);
+        encode_message(MSG_PUBLISH_DONE, &payload, buf);
     }
 
     pub fn decode(buf: &mut &[u8]) -> Result<Self> {
-        let (msg_type, payload) = decode_message_header(buf)?;
+        let (msg_type, payload) = decode_message(buf)?;
         ensure!(
             msg_type == MSG_PUBLISH_DONE,
             "expected PUBLISH_DONE (0x{MSG_PUBLISH_DONE:X}), got 0x{msg_type:X}"

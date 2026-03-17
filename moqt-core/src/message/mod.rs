@@ -3,14 +3,16 @@
 //! Defines the control messages exchanged over a MOQT session.
 //! Each message is sent/received on a bidirectional stream (bidi stream).
 //!
-//! ## Message frame structure
+//! ## Message structure
 //! ```text
-//! [Message Type (varint)] [Payload Length (u16 BE)] [Payload]
+//! Message Type (vi64),
+//! Payload Length (u16),
+//! Payload (..)
 //! ```
 //! Note: Payload Length is a fixed 16-bit big-endian integer, not a varint.
 //!
 //! ## Typical message flow
-//! 1. SETUP: Both sides exchange during connection establishment
+//! 1. SETUP: Both sides exchange to establish the MOQT session
 //! 2. PUBLISH_NAMESPACE: Publisher registers available namespaces
 //! 3. SUBSCRIBE: Subscriber requests a specific track
 //! 4. SUBSCRIBE_OK / REQUEST_ERROR: Success/failure response to subscription
@@ -40,20 +42,19 @@ pub const MSG_PUBLISH_DONE: u64 = 0x0B;
 /// Also used to identify the control stream.
 pub const MSG_SETUP: u64 = 0x2F00;
 
-/// Encode a control message frame.
-/// Format: [Type (varint)] [Length (u16 BE)] [Payload]
+/// Encode a control message.
 ///
 /// Length is a fixed u16 (not varint) so the receiver can determine
 /// the buffer size in advance.
-pub fn encode_message_frame(msg_type: u64, payload: &[u8], buf: &mut Vec<u8>) {
+pub fn encode_message(msg_type: u64, payload: &[u8], buf: &mut Vec<u8>) {
     encode_varint(msg_type, buf);
     let len = payload.len() as u16;
     buf.extend_from_slice(&len.to_be_bytes());
     buf.extend_from_slice(payload);
 }
 
-/// Decode a control message frame header, returning (message type, payload).
-pub fn decode_message_header(buf: &mut &[u8]) -> Result<(u64, Vec<u8>)> {
+/// Decode a control message, returning (message type, payload).
+pub fn decode_message(buf: &mut &[u8]) -> Result<(u64, Vec<u8>)> {
     let msg_type = decode_varint(buf)?;
     ensure!(buf.len() >= 2, "need 2 bytes for message length");
     let len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
