@@ -281,6 +281,7 @@ async fn object_forwarding() {
         let header = SubgroupHeader {
             track_alias: 1,
             group_id: 0,
+            has_properties: false,
         };
         let mut data = Vec::new();
         header.encode(&mut data);
@@ -347,14 +348,14 @@ async fn object_forwarding() {
     assert_eq!(header.track_alias, 1);
     assert_eq!(header.group_id, 0);
 
-    let obj0 = ObjectHeader::decode(&mut data_slice).unwrap();
+    let obj0 = ObjectHeader::decode(&mut data_slice, false).unwrap();
     assert_eq!(obj0.object_id_delta, 0);
     assert_eq!(obj0.payload_length, 5);
     let payload0 = &data_slice[..5];
     data_slice = &data_slice[5..];
     assert_eq!(payload0, b"hello");
 
-    let obj1 = ObjectHeader::decode(&mut data_slice).unwrap();
+    let obj1 = ObjectHeader::decode(&mut data_slice, false).unwrap();
     assert_eq!(obj1.object_id_delta, 0);
     assert_eq!(obj1.payload_length, 5);
     let payload1 = &data_slice[..5];
@@ -406,6 +407,7 @@ async fn publish_done_forwarding() {
         let header = SubgroupHeader {
             track_alias: 1,
             group_id: 0,
+            has_properties: false,
         };
         let mut data = Vec::new();
         header.encode(&mut data);
@@ -501,6 +503,7 @@ async fn multiple_groups() {
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
+                has_properties: false,
             };
             let mut data = Vec::new();
             header.encode(&mut data);
@@ -570,7 +573,7 @@ async fn multiple_groups() {
         let header = SubgroupHeader::decode(&mut data).unwrap();
         let mut payloads = Vec::new();
         while !data.is_empty() {
-            let obj = ObjectHeader::decode(&mut data).unwrap();
+            let obj = ObjectHeader::decode(&mut data, false).unwrap();
             let payload = std::str::from_utf8(&data[..obj.payload_length as usize])
                 .unwrap()
                 .to_string();
@@ -648,6 +651,7 @@ async fn late_join() {
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
+                has_properties: false,
             };
             let mut data = Vec::new();
             header.encode(&mut data);
@@ -718,7 +722,7 @@ async fn late_join() {
     // Should receive at least the first group
     assert_eq!(header.track_alias, 1);
 
-    let obj = ObjectHeader::decode(&mut data).unwrap();
+    let obj = ObjectHeader::decode(&mut data, false).unwrap();
     let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap();
     assert!(payload.starts_with("late-g"));
 }
@@ -844,6 +848,7 @@ async fn multiple_subscribers() {
         let header = SubgroupHeader {
             track_alias: 1,
             group_id: 0,
+            has_properties: false,
         };
         let mut data = Vec::new();
         header.encode(&mut data);
@@ -907,7 +912,7 @@ async fn multiple_subscribers() {
         // Extract payload
         let mut data = all_data.as_slice();
         let _header = SubgroupHeader::decode(&mut data).unwrap();
-        let obj = ObjectHeader::decode(&mut data).unwrap();
+        let obj = ObjectHeader::decode(&mut data, false).unwrap();
         data[..obj.payload_length as usize].to_vec()
     }
 
@@ -981,6 +986,7 @@ async fn multiple_tracks() {
         SubgroupHeader {
             track_alias: 1,
             group_id: 0,
+            has_properties: false,
         }
         .encode(&mut data_v);
         ObjectHeader {
@@ -998,6 +1004,7 @@ async fn multiple_tracks() {
         SubgroupHeader {
             track_alias: 2,
             group_id: 0,
+            has_properties: false,
         }
         .encode(&mut data_a);
         ObjectHeader {
@@ -1076,7 +1083,7 @@ async fn multiple_tracks() {
         }
         let mut data = all_data.as_slice();
         let _header = SubgroupHeader::decode(&mut data).unwrap();
-        let obj = ObjectHeader::decode(&mut data).unwrap();
+        let obj = ObjectHeader::decode(&mut data, false).unwrap();
         let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap();
         payloads.push(payload.to_string());
     }
@@ -1126,6 +1133,7 @@ async fn subscriber_disconnect() {
             SubgroupHeader {
                 track_alias: 1,
                 group_id,
+                has_properties: false,
             }
             .encode(&mut data);
             ObjectHeader {

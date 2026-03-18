@@ -11,7 +11,7 @@
 //! For consecutive IDs (0, 1, 2, ...), all objects have delta = 0, which is efficient.
 //! A delta greater than 0 means the skipped objects are in a different subgroup or don't exist.
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 
 use crate::primitives::varint::{decode_varint, encode_varint};
 
@@ -35,9 +35,17 @@ impl ObjectHeader {
         encode_varint(self.payload_length, buf);
     }
 
-    pub fn decode(buf: &mut &[u8]) -> Result<Self> {
+    /// Decode an object header. If `has_properties` is true (PROPERTIES bit
+    /// in SubgroupHeader), skip the Object Properties field.
+    pub fn decode(buf: &mut &[u8], has_properties: bool) -> Result<Self> {
         let object_id_delta = decode_varint(buf)?;
         let payload_length = decode_varint(buf)?;
+        // Skip Object Properties if present (length-prefixed Key-Value-Pairs)
+        if has_properties {
+            let props_len = decode_varint(buf)? as usize;
+            ensure!(buf.len() >= props_len, "object properties truncated");
+            *buf = &buf[props_len..];
+        }
         Ok(ObjectHeader {
             object_id_delta,
             payload_length,
@@ -64,7 +72,7 @@ mod tests {
         let mut buf = Vec::new();
         header.encode(&mut buf);
         let mut slice = buf.as_slice();
-        let decoded = ObjectHeader::decode(&mut slice).unwrap();
+        let decoded = ObjectHeader::decode(&mut slice, false).unwrap();
         assert_eq!(header, &decoded);
         assert!(slice.is_empty());
     }
@@ -151,7 +159,7 @@ mod tests {
         let mut slice = buf.as_slice();
         let mut prev_id: Option<u64> = None;
         for (i, (_, expected_payload)) in objects.iter().enumerate() {
-            let header = ObjectHeader::decode(&mut slice).unwrap();
+            let header = ObjectHeader::decode(&mut slice, false).unwrap();
             let id = resolve_object_id(prev_id, header.object_id_delta);
             assert_eq!(id, i as u64);
 

@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 
                                 // Write each Object as an IVF frame
                                 while !data.is_empty() {
-                                    if let Ok(obj) = ObjectHeader::decode(&mut data) {
+                                    if let Ok(obj) = ObjectHeader::decode(&mut data, false) {
                                         let payload = &data[..obj.payload_length as usize];
                                         data = &data[obj.payload_length as usize..];
 
@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
                                 );
                                 let mut prev_id: Option<u64> = None;
                                 while !data.is_empty() {
-                                    let obj = ObjectHeader::decode(&mut data).unwrap();
+                                    let obj = ObjectHeader::decode(&mut data, false).unwrap();
                                     let id = resolve_object_id(prev_id, obj.object_id_delta);
                                     let payload = &data[..obj.payload_length as usize];
                                     data = &data[obj.payload_length as usize..];

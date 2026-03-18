@@ -158,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
+                has_properties: false,
             };
             let mut data = Vec::new();
             header.encode(&mut data);
@@ -295,6 +296,7 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
+                has_properties: false,
             };
             let mut header_buf = Vec::new();
             header.encode(&mut header_buf);
