@@ -48,11 +48,11 @@ use moqt_core::message::setup::SetupMessage;
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::message::{MSG_PUBLISH_NAMESPACE, MSG_SUBSCRIBE};
+use moqt_core::primitives::reason_phrase::ReasonPhrase;
+use moqt_core::primitives::track_namespace::TrackNamespace;
+use moqt_core::primitives::varint::decode_varint;
 use moqt_core::session::control_stream::ControlStreamReader;
 use moqt_core::session::request_id::RequestIdAllocator;
-use moqt_core::wire::reason_phrase::ReasonPhrase;
-use moqt_core::wire::track_namespace::TrackNamespace;
-use moqt_core::wire::varint::decode_varint;
 
 /// セッションの一意な識別子。接続ごとに連番で割り当てる。
 type SessionId = u64;

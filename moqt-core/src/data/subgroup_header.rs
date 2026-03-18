@@ -1,35 +1,41 @@
-//! # subgroup_header: サブグループヘッダー
+//! # subgroup_header: Subgroup header (Section 10.2)
 //!
-//! QUIC 単方向ストリームの先頭に書き込まれるヘッダー。
-//! どのトラック（Track Alias）のどのグループ（Group ID）のデータかを示す。
+//! Written at the beginning of a QUIC unidirectional stream.
+//! Identifies which track (Track Alias) and group (Group ID) the data belongs to.
 //!
-//! ## Subgroup Header Type (0x38) のビットフィールド
+//! ## Subgroup Header Type (0x38) bit fields
 //! ```text
-//! ビット 0   (PROPERTIES):       0 — プロパティなし
-//! ビット 1-2 (SUBGROUP_ID_MODE): 00 — Subgroup ID = 0（省略）
-//! ビット 3   (END_OF_GROUP):     1 — このストリームでグループが完結する
-//! ビット 4   (固定):             1 — Subgroup Header であることを示す
-//! ビット 5   (DEFAULT_PRIORITY): 1 — デフォルト優先度を使用
+//! Bit 0   (PROPERTIES):       0 — no properties
+//! Bit 1-2 (SUBGROUP_ID_MODE): 00 — Subgroup ID = 0 (omitted)
+//! Bit 3   (END_OF_GROUP):     1 — this stream completes the group
+//! Bit 4   (fixed):            1 — indicates this is a Subgroup Header
+//! Bit 5   (DEFAULT_PRIORITY): 1 — use default priority
 //! ```
 //! → 0b00111000 = 0x38
 //!
-//! 最小実装では、1つの Group = 1つの Subgroup = 1つの QUIC ストリーム。
+//! In this minimal implementation, 1 Group = 1 Subgroup = 1 QUIC stream.
 
 use anyhow::{Result, ensure};
 
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
-/// 最小実装で使用する Subgroup Header Type。
-/// ビットフィールドの意味は上記モジュールドキュメント参照。
+/// Subgroup Header Type used in this minimal implementation.
+/// See module doc for bit field meanings.
 const SUBGROUP_TYPE: u64 = 0x38;
 
-/// サブグループヘッダー。QUIC 単方向ストリームの先頭に書き込まれる。
+/// Subgroup header. Written at the beginning of a QUIC unidirectional stream.
+///
+/// ```text
+/// Subgroup Header Type (vi64) = 0x38,
+/// Track Alias (vi64),
+/// Group ID (vi64)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubgroupHeader {
-    /// SUBSCRIBE_OK で割り当てられたトラックエイリアス。
-    /// フルのトラック名前空間を毎回送る代わりに、短い数値で識別する。
+    /// Track alias assigned in SUBSCRIBE_OK.
+    /// Identifies the track without sending the full namespace each time.
     pub track_alias: u64,
-    /// このストリームが含むグループの ID。連番で増加する。
+    /// Group ID for this stream. Monotonically increasing.
     pub group_id: u64,
 }
 
@@ -97,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn wrong_type() {
+    fn wrong_type_is_error() {
         let mut buf = Vec::new();
         encode_varint(0x10, &mut buf); // wrong type
         encode_varint(1, &mut buf);

@@ -1,20 +1,20 @@
-//! # data: MOQT データストリームの型定義
+//! # data: MOQT data stream types (Section 10)
 //!
-//! メディアデータは QUIC 単方向ストリーム（uni stream）で送信される。
-//! 各ストリームは以下の構造を持つ:
+//! Media data is sent over QUIC unidirectional streams (uni streams).
+//! Each stream has the following structure:
 //!
 //! ```text
-//! [SubgroupHeader]  ← ストリームの先頭に1回
-//! [ObjectHeader + Payload]  ← オブジェクトが0個以上続く
-//! [ObjectHeader + Payload]
+//! SubgroupHeader     <- once at the beginning of the stream
+//! ObjectHeader + Payload  <- zero or more objects follow
+//! ObjectHeader + Payload
 //! ...
-//! [FIN]  ← ストリーム終了
+//! FIN                <- stream end
 //! ```
 //!
-//! ## Group と Object の関係
-//! - Group: 独立してデコード可能なメディアデータの単位（例: キーフレームから始まる映像セグメント）
-//! - Object: Group 内の個々のデータ単位（例: 1つの映像フレーム）
-//! - Subgroup: Group 内のサブ分割（最小実装では1つの Group に1つの Subgroup）
+//! ## Relationship between Group, Subgroup, and Object
+//! - Group: A unit of independently decodable media data (e.g. a video segment starting with a keyframe)
+//! - Object: An individual data unit within a Group (e.g. a single video frame)
+//! - Subgroup: A subdivision within a Group (1 Group = 1 Subgroup = 1 stream in this minimal implementation)
 
 pub mod object;
 pub mod subgroup_header;

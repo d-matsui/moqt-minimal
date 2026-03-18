@@ -1,26 +1,31 @@
-//! # object: サブグループ内のオブジェクト
+//! # object: Objects within a subgroup (Section 10.2.1)
 //!
-//! サブグループストリーム上で、SubgroupHeader の後に続くオブジェクトデータ。
-//! 各オブジェクトはヘッダー（Object ID Delta + Payload Length）とペイロードで構成される。
+//! Object data that follows the SubgroupHeader on a subgroup stream.
+//! Each object consists of a header (Object ID Delta + Payload Length) and payload.
 //!
-//! ## Object ID のデルタエンコーディング
-//! Object ID は直接エンコードされず、前のオブジェクトとの差分（デルタ）で表現される。
-//! - 最初のオブジェクト: Object ID = delta
-//! - 2番目以降: Object ID = 前の Object ID + delta + 1
+//! ## Object ID delta encoding
+//! Object ID is not encoded directly, but as a delta from the previous object:
+//! - First object: Object ID = delta
+//! - Subsequent objects: Object ID = previous Object ID + delta + 1
 //!
-//! 連番（0, 1, 2, ...）の場合、全てのオブジェクトで delta = 0 となり効率的。
-//! デルタが 0 より大きい場合、間のオブジェクトは別のサブグループにあるか存在しない。
+//! For consecutive IDs (0, 1, 2, ...), all objects have delta = 0, which is efficient.
+//! A delta greater than 0 means the skipped objects are in a different subgroup or don't exist.
 
 use anyhow::Result;
 
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
-/// オブジェクトヘッダー。ペイロードの前に書き込まれる。
+/// Object header. Written before each object payload.
+///
+/// ```text
+/// Object ID Delta (vi64),
+/// Payload Length (vi64)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectHeader {
-    /// 前のオブジェクトとの Object ID 差分。連番なら常に 0。
+    /// Object ID delta from the previous object. Always 0 for consecutive IDs.
     pub object_id_delta: u64,
-    /// 後続するペイロードのバイト数。受信側はこの値で読み取り量を確定できる。
+    /// Byte count of the following payload. The receiver reads exactly this many bytes.
     pub payload_length: u64,
 }
 
@@ -40,10 +45,10 @@ impl ObjectHeader {
     }
 }
 
-/// デルタから絶対 Object ID を計算する。
-/// - 最初のオブジェクト（prev_object_id = None）: Object ID = delta
-/// - 2番目以降: Object ID = prev_object_id + delta + 1
-///   （+1 は「連番の場合 delta=0 で済む」ようにするため）
+/// Compute the absolute Object ID from a delta.
+/// - First object (prev_object_id = None): Object ID = delta
+/// - Subsequent: Object ID = prev_object_id + delta + 1
+///   (the +1 ensures consecutive IDs use delta=0)
 pub fn resolve_object_id(prev_object_id: Option<u64>, delta: u64) -> u64 {
     match prev_object_id {
         None => delta,
@@ -106,7 +111,7 @@ mod tests {
     // Object ID resolution: gap (delta > 0 for non-first)
     #[test]
     fn resolve_with_gap() {
-        // prev=2, delta=2 → 2 + 2 + 1 = 5 (objects 3 and 4 are in different subgroups or don't exist)
+        // prev=2, delta=2 -> 2 + 2 + 1 = 5 (objects 3 and 4 are in different subgroups or don't exist)
         assert_eq!(resolve_object_id(Some(2), 2), 5);
     }
 

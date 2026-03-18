@@ -21,9 +21,9 @@ use moqt_core::message::request_ok::RequestOkMessage;
 use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
+use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::ControlStreamReader;
 use moqt_core::session::quic_config;
-use moqt_core::wire::track_namespace::TrackNamespace;
 
 /// Helper: generate self-signed cert and return (cert_der, key_der)
 fn gen_cert() -> (
@@ -422,7 +422,7 @@ async fn publish_done_forwarding() {
         let done = PublishDoneMessage {
             status_code: 0x2, // TRACK_ENDED
             stream_count: 1,
-            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
         };
         let mut done_buf = Vec::new();
         done.encode(&mut done_buf);
@@ -522,7 +522,7 @@ async fn multiple_groups() {
         let done = PublishDoneMessage {
             status_code: 0x2,
             stream_count: 3,
-            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
         };
         buf.clear();
         done.encode(&mut buf);
@@ -667,7 +667,7 @@ async fn late_join() {
         let done = PublishDoneMessage {
             status_code: 0x2,
             stream_count: 2,
-            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
         };
         buf.clear();
         done.encode(&mut buf);
@@ -860,7 +860,7 @@ async fn multiple_subscribers() {
         let done = PublishDoneMessage {
             status_code: 0x2,
             stream_count: 1,
-            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
         };
         let mut done_buf = Vec::new();
         done.encode(&mut done_buf);
@@ -1013,7 +1013,7 @@ async fn multiple_tracks() {
         let done = PublishDoneMessage {
             status_code: 0x2,
             stream_count: 1,
-            reason_phrase: moqt_core::wire::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
         };
         buf.clear();
         done.encode(&mut buf);

@@ -6,7 +6,7 @@
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_OK, decode_message, encode_message};
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
 /// REQUEST_OK message. Indicates that a request was successful.
 ///

@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 
 use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
 use super::{MSG_SUBSCRIBE_OK, decode_message, encode_message};
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
 /// SUBSCRIBE_OK message. Success response to a subscription.
 ///

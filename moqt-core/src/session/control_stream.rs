@@ -19,7 +19,7 @@ use anyhow::{Result, bail};
 use quinn::{RecvStream, SendStream};
 
 use crate::message::MSG_SETUP;
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
 /// MOQT コントロールストリームの書き込み側。
 /// 各ピアが1本ずつ開く QUIC 単方向ストリームに対応する。
@@ -44,7 +44,7 @@ impl ControlStreamWriter {
 
         // SETUP メッセージのペイロード（Setup Options を Key-Value-Pair でエンコード）
         let mut payload = Vec::new();
-        use crate::wire::key_value_pair::{KeyValuePair, KvValue, encode_key_value_pairs};
+        use crate::primitives::key_value_pair::{KeyValuePair, KvValue, encode_key_value_pairs};
         let kvs: Vec<KeyValuePair> = msg
             .setup_options
             .iter()

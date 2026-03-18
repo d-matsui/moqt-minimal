@@ -4,12 +4,12 @@
 //! エンコード・デコード機能を提供する。
 //!
 //! ## モジュール構成
-//! - `wire`: 可変長整数 (varint) やトラック名前空間など、ワイヤーフォーマットの基本型
+//! - `primitives`: 可変長整数 (varint) やトラック名前空間など、プロトコルの基本型
 //! - `message`: SETUP, SUBSCRIBE, PUBLISH_NAMESPACE などの制御メッセージ
 //! - `data`: サブグループヘッダーやオブジェクトなど、メディアデータストリーム用の型
 //! - `session`: QUIC セッション管理（コントロールストリーム、リクエストID 割り当て、QUIC設定）
 
 pub mod data;
 pub mod message;
+pub mod primitives;
 pub mod session;
-pub mod wire;

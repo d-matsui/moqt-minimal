@@ -34,9 +34,9 @@ use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
+use moqt_core::primitives::reason_phrase::ReasonPhrase;
+use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::ControlStreamReader;
-use moqt_core::wire::reason_phrase::ReasonPhrase;
-use moqt_core::wire::track_namespace::TrackNamespace;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

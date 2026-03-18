@@ -11,10 +11,10 @@
 use anyhow::{Result, ensure};
 
 use super::{MSG_PUBLISH_NAMESPACE, decode_message, encode_message};
-use crate::wire::track_namespace::{
+use crate::primitives::track_namespace::{
     TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
 /// PUBLISH_NAMESPACE message. Registers a namespace that the publisher will publish to.
 ///

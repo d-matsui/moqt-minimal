@@ -29,7 +29,7 @@ pub mod subscribe_ok;
 
 use anyhow::{Result, ensure};
 
-use crate::wire::varint::{decode_varint, encode_varint};
+use crate::primitives::varint::{decode_varint, encode_varint};
 
 /// Message Type IDs (defined in spec Section 9)
 pub const MSG_SUBSCRIBE: u64 = 0x03;

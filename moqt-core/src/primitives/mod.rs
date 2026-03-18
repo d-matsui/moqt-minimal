@@ -1,4 +1,4 @@
-//! # wire: MOQT wire format primitives
+//! # primitives: MOQT protocol primitives
 //!
 //! Defines the basic data types exchanged as byte sequences in the MOQT protocol.
 //! These are used as building blocks by higher-level message types.

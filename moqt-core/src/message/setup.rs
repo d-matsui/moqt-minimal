@@ -14,7 +14,7 @@
 use anyhow::{Result, ensure};
 
 use super::{MSG_SETUP, decode_message, encode_message};
-use crate::wire::key_value_pair::{
+use crate::primitives::key_value_pair::{
     KeyValuePair, KvValue, decode_key_value_pairs, encode_key_value_pairs,
 };
 
