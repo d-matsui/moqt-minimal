@@ -31,6 +31,13 @@ pub struct SubscribeOkMessage {
     /// Track Properties as raw bytes (Section 2.5).
     /// Serialized as Key-Value-Pairs. Preserved for forwarding
     /// (MUST forward per spec), even if this implementation does not interpret them.
+    ///
+    /// Properties defined in the spec (Section 11):
+    /// - DELIVERY TIMEOUT (0x02): Publisher's delivery timeout for the track
+    /// - MAX CACHE DURATION (0x04): Maximum cache retention time
+    /// - DEFAULT PUBLISHER PRIORITY (0x0E): Default priority for the subscription
+    /// - DEFAULT PUBLISHER GROUP ORDER (0x22): Group delivery order
+    /// - DYNAMIC GROUPS: Whether the publisher supports dynamic groups
     pub track_properties_raw: Vec<u8>,
 }
 
