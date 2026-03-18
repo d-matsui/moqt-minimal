@@ -28,7 +28,10 @@ pub struct SubscribeOkMessage {
     pub track_alias: u64,
     /// Response parameters (e.g. LARGEST_OBJECT).
     pub parameters: Vec<MessageParameter>,
-    // Track Properties: empty in this minimal implementation
+    /// Track Properties as raw bytes (Section 2.5).
+    /// Serialized as Key-Value-Pairs. Preserved for forwarding
+    /// (MUST forward per spec), even if this implementation does not interpret them.
+    pub track_properties_raw: Vec<u8>,
 }
 
 impl SubscribeOkMessage {
@@ -36,8 +39,9 @@ impl SubscribeOkMessage {
         let mut payload = Vec::new();
         encode_varint(self.track_alias, &mut payload);
         encode_parameters(&self.parameters, &mut payload)?;
-        // Track Properties: empty (length 0) in this minimal implementation
-        encode_varint(0, &mut payload);
+        // Track Properties: write length + raw bytes
+        encode_varint(self.track_properties_raw.len() as u64, &mut payload);
+        payload.extend_from_slice(&self.track_properties_raw);
         encode_message(MSG_SUBSCRIBE_OK, &payload, buf);
         Ok(())
     }
@@ -51,13 +55,14 @@ impl SubscribeOkMessage {
         let mut p = payload.as_slice();
         let track_alias = decode_varint(&mut p)?;
         let parameters = decode_parameters(&mut p)?;
-        // Skip Track Properties (read length and skip that many bytes)
+        // Preserve Track Properties as raw bytes for forwarding
         let props_len = decode_varint(&mut p)? as usize;
         ensure!(p.len() >= props_len, "track properties truncated");
-        let _ = &p[..props_len];
+        let track_properties_raw = p[..props_len].to_vec();
         Ok(SubscribeOkMessage {
             track_alias,
             parameters,
+            track_properties_raw,
         })
     }
 }
@@ -81,6 +86,7 @@ mod tests {
         let msg = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         roundtrip(&msg);
     }
@@ -93,6 +99,7 @@ mod tests {
                 group: 10,
                 object: 5,
             }],
+            track_properties_raw: vec![],
         };
         roundtrip(&msg);
     }
@@ -102,6 +109,7 @@ mod tests {
         let msg = SubscribeOkMessage {
             track_alias: 0,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         msg.encode(&mut buf).unwrap();

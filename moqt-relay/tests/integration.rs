@@ -203,6 +203,7 @@ async fn subscribe_via_relay() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();
@@ -269,6 +270,7 @@ async fn object_forwarding() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();
@@ -393,6 +395,7 @@ async fn publish_done_forwarding() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();
@@ -487,6 +490,7 @@ async fn multiple_groups() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();
@@ -632,6 +636,7 @@ async fn late_join() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();
@@ -815,6 +820,7 @@ async fn multiple_subscribers() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();
@@ -948,6 +954,7 @@ async fn multiple_tracks() {
         let ok_v = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok_v.encode(&mut buf).unwrap();
@@ -960,6 +967,7 @@ async fn multiple_tracks() {
         let ok_a = SubscribeOkMessage {
             track_alias: 2,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         buf.clear();
         ok_a.encode(&mut buf).unwrap();
@@ -1105,6 +1113,7 @@ async fn subscriber_disconnect() {
         let ok = SubscribeOkMessage {
             track_alias: 1,
             parameters: vec![],
+            track_properties_raw: vec![],
         };
         let mut buf = Vec::new();
         ok.encode(&mut buf).unwrap();

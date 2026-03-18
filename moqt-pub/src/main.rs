@@ -127,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let ok = SubscribeOkMessage {
         track_alias: 1,
         parameters: vec![],
+        track_properties_raw: vec![],
     };
     buf.clear();
     ok.encode(&mut buf)?;
