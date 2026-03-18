@@ -1,23 +1,33 @@
-//! # request_ok: REQUEST_OK メッセージ
+//! # request_ok: REQUEST_OK message (Section 9.6)
 //!
-//! PUBLISH_NAMESPACE などのリクエストに対する成功応答。
-//! 最小実装ではパラメータを含まない。
+//! Success response to requests such as PUBLISH_NAMESPACE.
+//! This minimal implementation does not include any parameters.
 
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_OK, decode_message, encode_message};
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// REQUEST_OK メッセージ。リクエストの成功を示す。
+/// REQUEST_OK message. Indicates that a request was successful.
+///
+/// ```text
+/// Type (vi64) = 0x7,
+/// Length (u16),
+/// Number of Parameters (vi64),
+/// Parameters (..) ...
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestOkMessage {
-    // Parameters: 最小実装では省略（count = 0）
+    // Parameters: LARGEST_OBJECT (0x09) can appear here when responding to
+    // REQUEST_UPDATE or TRACK_STATUS, but this minimal implementation only
+    // uses REQUEST_OK for PUBLISH_NAMESPACE responses, so count = 0.
 }
 
 impl RequestOkMessage {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         let mut payload = Vec::new();
-        encode_varint(0, &mut payload); // パラメータ数 = 0
+        // Parameter count = 0 (minimal implementation)
+        encode_varint(0, &mut payload);
         encode_message(MSG_REQUEST_OK, &payload, buf);
     }
 
@@ -50,5 +60,25 @@ mod tests {
         let decoded = RequestOkMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);
         assert!(slice.is_empty());
+    }
+
+    #[test]
+    fn wrong_message_type_is_error() {
+        let mut buf = Vec::new();
+        encode_message(0x03, &[], &mut buf);
+        let mut slice = buf.as_slice();
+        assert!(RequestOkMessage::decode(&mut slice).is_err());
+    }
+
+    #[test]
+    fn nonzero_params_is_error() {
+        let mut payload = Vec::new();
+        encode_varint(1, &mut payload); // parameter count = 1
+        encode_varint(0x09, &mut payload); // fake parameter type
+        encode_varint(0, &mut payload); // fake parameter value
+        let mut buf = Vec::new();
+        encode_message(MSG_REQUEST_OK, &payload, &mut buf);
+        let mut slice = buf.as_slice();
+        assert!(RequestOkMessage::decode(&mut slice).is_err());
     }
 }

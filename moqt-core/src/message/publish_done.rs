@@ -1,11 +1,11 @@
-//! # publish_done: PUBLISH_DONE メッセージ
+//! # publish_done: PUBLISH_DONE message (Section 9.13)
 //!
-//! パブリッシャーがトラックの配信を終了したことを通知するメッセージ。
-//! リレーはこのメッセージを受け取ると、関連するサブスクライバーに転送する。
+//! Sent by a publisher to notify that it is done publishing objects
+//! for a subscription. The relay forwards this to related subscribers.
 //!
-//! ## 主なステータスコード
-//! - `0x0`: INTERNAL_ERROR（内部エラーによる終了）
-//! - `0x2`: TRACK_ENDED（正常終了）
+//! ## Common status codes
+//! - `0x0`: INTERNAL_ERROR
+//! - `0x2`: TRACK_ENDED (normal termination)
 
 use anyhow::{Result, ensure};
 
@@ -13,14 +13,22 @@ use super::{MSG_PUBLISH_DONE, decode_message, encode_message};
 use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// PUBLISH_DONE メッセージ。配信終了を通知する。
+/// PUBLISH_DONE message. Notifies the end of publishing.
+///
+/// ```text
+/// Type (vi64) = 0xB,
+/// Length (u16),
+/// Status Code (vi64),
+/// Stream Count (vi64),
+/// Error Reason (Reason Phrase)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishDoneMessage {
-    /// 終了理由を示すステータスコード。
+    /// Status code indicating why the subscription ended.
     pub status_code: u64,
-    /// 配信中に送信したストリーム（サブグループ）の総数。
+    /// Total number of streams (subgroups) sent during publishing.
     pub stream_count: u64,
-    /// 人間が読める終了理由（デバッグ用）。
+    /// Human-readable termination reason (for debugging).
     pub reason_phrase: ReasonPhrase,
 }
 
@@ -84,5 +92,13 @@ mod tests {
         let mut slice = buf.as_slice();
         let decoded = PublishDoneMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn wrong_message_type_is_error() {
+        let mut buf = Vec::new();
+        encode_message(0x03, &[], &mut buf);
+        let mut slice = buf.as_slice();
+        assert!(PublishDoneMessage::decode(&mut slice).is_err());
     }
 }

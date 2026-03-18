@@ -23,6 +23,12 @@ const OPTION_PATH: u64 = 0x01;
 const OPTION_AUTHORITY: u64 = 0x05;
 
 /// SETUP message. Exchanged by both sides during session establishment.
+///
+/// ```text
+/// Type (vi64) = 0x2F00,
+/// Length (u16),
+/// Setup Options (..) ...
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupMessage {
     pub setup_options: Vec<SetupOption>,

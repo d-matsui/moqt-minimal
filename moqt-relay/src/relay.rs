@@ -39,6 +39,7 @@ use anyhow::{Result, bail};
 use quinn::{Connection, Endpoint};
 use tokio::sync::Mutex;
 
+use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::request_error::RequestErrorMessage;
@@ -481,6 +482,30 @@ async fn handle_subscribe(
 ) -> Result<()> {
     let subscriber_send = Arc::new(Mutex::new(subscriber_send));
 
+    // === フィルタのチェック ===
+    // This minimal implementation only supports NextGroupStart.
+    // Reject other filter types with REQUEST_ERROR (NOT_SUPPORTED).
+    let has_unsupported_filter = msg.parameters.iter().any(|p| {
+        matches!(
+            p,
+            MessageParameter::SubscriptionFilter(f)
+            if !matches!(f, SubscriptionFilter::NextGroupStart)
+        )
+    });
+    if has_unsupported_filter {
+        let err = RequestErrorMessage {
+            error_code: 0x3, // NOT_SUPPORTED
+            retry_interval: 0,
+            reason_phrase: ReasonPhrase {
+                value: b"only NextGroupStart filter is supported".to_vec(),
+            },
+        };
+        let mut buf = Vec::new();
+        err.encode(&mut buf);
+        subscriber_send.lock().await.write_all(&buf).await?;
+        return Ok(());
+    }
+
     // === パブリッシャーの検索 ===
     // 登録された名前空間の中から、SUBSCRIBE の名前空間に前方一致するものを探す。
     // 例: パブリッシャーが ["example"] を登録し、サブスクライバーが ["example", "live"] を
@@ -580,7 +605,7 @@ async fn handle_subscribe(
 
     // サブスクライバーに SUBSCRIBE_OK を転送
     let mut ok_buf = Vec::new();
-    subscribe_ok.encode(&mut ok_buf);
+    subscribe_ok.encode(&mut ok_buf)?;
     subscriber_send.lock().await.write_all(&ok_buf).await?;
 
     // === PUBLISH_DONE の待機と転送 ===

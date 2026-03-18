@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
         parameters: vec![],
     };
     buf.clear();
-    ok.encode(&mut buf);
+    ok.encode(&mut buf)?;
     sub_send.write_all(&buf).await?;
     eprintln!("Sent SUBSCRIBE_OK (alias=1).");
 

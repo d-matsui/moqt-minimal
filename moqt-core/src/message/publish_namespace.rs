@@ -1,12 +1,12 @@
-//! # publish_namespace: PUBLISH_NAMESPACE メッセージ
+//! # publish_namespace: PUBLISH_NAMESPACE message (Section 9.17)
 //!
-//! パブリッシャーがリレーサーバーに対して「この名前空間でメディアを配信する」
-//! ことを宣言するメッセージ。リレーはこの情報を使って、サブスクライバーの
-//! SUBSCRIBE を適切なパブリッシャーに転送する。
+//! A publisher sends this message to the relay to declare that it will
+//! publish media under a given namespace. The relay uses this information
+//! to route SUBSCRIBEs to the appropriate publisher.
 //!
-//! ## プロトコルフロー
-//! 1. パブリッシャー → リレー: PUBLISH_NAMESPACE
-//! 2. リレー → パブリッシャー: REQUEST_OK（受理）または REQUEST_ERROR（拒否）
+//! ## Protocol flow
+//! 1. Publisher -> Relay: PUBLISH_NAMESPACE
+//! 2. Relay -> Publisher: REQUEST_OK (accepted) or REQUEST_ERROR (rejected)
 
 use anyhow::{Result, ensure};
 
@@ -16,15 +16,26 @@ use crate::wire::track_namespace::{
 };
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// PUBLISH_NAMESPACE メッセージ。パブリッシャーが配信名前空間を登録する。
+/// PUBLISH_NAMESPACE message. Registers a namespace that the publisher will publish to.
+///
+/// ```text
+/// Type (vi64) = 0x6,
+/// Length (u16),
+/// Request ID (vi64),
+/// Required Request ID Delta (vi64),
+/// Track Namespace (..),
+/// Number of Parameters (vi64),
+/// Parameters (..) ...
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishNamespaceMessage {
     pub request_id: u64,
-    /// 依存する先行リクエストとの ID 差分。最小実装では常に 0。
+    /// ID delta from a dependent prior request. Always 0 in this minimal implementation.
     pub required_request_id_delta: u64,
-    /// 登録する名前空間。
+    /// The namespace to register.
     pub track_namespace: TrackNamespace,
-    // Parameters: 最小実装では省略（count = 0）
+    // Parameters: AUTHORIZATION TOKEN (0x03) can appear here per the spec,
+    // but this minimal implementation does not support auth, so count = 0.
 }
 
 impl PublishNamespaceMessage {
@@ -33,7 +44,7 @@ impl PublishNamespaceMessage {
         encode_varint(self.request_id, &mut payload);
         encode_varint(self.required_request_id_delta, &mut payload);
         encode_track_namespace(&self.track_namespace, &mut payload)?;
-        // パラメータ数 = 0（最小実装）
+        // Parameter count = 0 (minimal implementation)
         encode_varint(0, &mut payload);
         encode_message(MSG_PUBLISH_NAMESPACE, &payload, buf);
         Ok(())
@@ -95,5 +106,13 @@ mod tests {
         let mut slice = buf.as_slice();
         let decoded = PublishNamespaceMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn wrong_message_type_is_error() {
+        let mut buf = Vec::new();
+        encode_message(0x03, &[], &mut buf); // SUBSCRIBE type, not PUBLISH_NAMESPACE
+        let mut slice = buf.as_slice();
+        assert!(PublishNamespaceMessage::decode(&mut slice).is_err());
     }
 }

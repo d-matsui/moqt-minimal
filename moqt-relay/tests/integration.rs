@@ -205,7 +205,7 @@ async fn subscribe_via_relay() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send.write_all(&buf).await.unwrap();
     });
 
@@ -271,7 +271,7 @@ async fn object_forwarding() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send.write_all(&buf).await.unwrap();
 
         // Send a subgroup with 2 objects
@@ -395,7 +395,7 @@ async fn publish_done_forwarding() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send.write_all(&buf).await.unwrap();
 
         // Send one object
@@ -489,7 +489,7 @@ async fn multiple_groups() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send.write_all(&buf).await.unwrap();
 
         for group_id in 0u64..3 {
@@ -634,7 +634,7 @@ async fn late_join() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send.write_all(&buf).await.unwrap();
 
         // Send 2 groups after subscriber joins
@@ -817,7 +817,7 @@ async fn multiple_subscribers() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send1.write_all(&buf).await.unwrap();
 
         // Accept second SUBSCRIBE
@@ -827,7 +827,7 @@ async fn multiple_subscribers() {
         let mut s2 = sub_bytes2.as_slice();
         let _sub2 = SubscribeMessage::decode(&mut s2).unwrap();
         let mut buf2 = Vec::new();
-        ok.encode(&mut buf2);
+        ok.encode(&mut buf2).unwrap();
         send2.write_all(&buf2).await.unwrap();
 
         // Small delay so both subscriptions are registered before sending
@@ -950,7 +950,7 @@ async fn multiple_tracks() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok_v.encode(&mut buf);
+        ok_v.encode(&mut buf).unwrap();
         send_v.write_all(&buf).await.unwrap();
 
         // Accept SUBSCRIBE for audio (alias=2)
@@ -962,7 +962,7 @@ async fn multiple_tracks() {
             parameters: vec![],
         };
         buf.clear();
-        ok_a.encode(&mut buf);
+        ok_a.encode(&mut buf).unwrap();
         send_a.write_all(&buf).await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1107,7 +1107,7 @@ async fn subscriber_disconnect() {
             parameters: vec![],
         };
         let mut buf = Vec::new();
-        ok.encode(&mut buf);
+        ok.encode(&mut buf).unwrap();
         send.write_all(&buf).await.unwrap();
 
         // Send a few groups

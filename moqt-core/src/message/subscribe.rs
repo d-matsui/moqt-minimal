@@ -1,21 +1,11 @@
-//! # subscribe: SUBSCRIBE メッセージ
+//! # subscribe: SUBSCRIBE message (Section 9.8)
 //!
-//! サブスクライバーがリレー経由でパブリッシャーに対して
-//! 特定のトラックの購読を要求するためのメッセージ。
+//! Sent by a subscriber (via relay) to request subscription to a specific track.
 //!
-//! ## ワイヤーフォーマット
-//! ```text
-//! [Request ID (varint)]
-//! [Required Request ID Delta (varint)]
-//! [Track Namespace]
-//! [Track Name Length (varint)] [Track Name]
-//! [Parameters]
-//! ```
-//!
-//! ## Request ID について
-//! - クライアント発のリクエストは偶数 ID（0, 2, 4, ...）
-//! - サーバー発のリクエストは奇数 ID（1, 3, 5, ...）
-//! - Required Request ID Delta は依存関係の表現に使われる（最小実装では 0）
+//! ## Request ID
+//! - Client-originated requests use even IDs (0, 2, 4, ...)
+//! - Server-originated requests use odd IDs (1, 3, 5, ...)
+//! - Required Request ID Delta expresses dependencies (always 0 in this minimal implementation)
 
 use anyhow::{Result, ensure};
 
@@ -26,18 +16,30 @@ use crate::wire::track_namespace::{
 };
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// SUBSCRIBE メッセージ。特定のトラックの購読を要求する。
+/// SUBSCRIBE message. Requests subscription to a specific track.
+///
+/// ```text
+/// Type (vi64) = 0x3,
+/// Length (u16),
+/// Request ID (vi64),
+/// Required Request ID Delta (vi64),
+/// Track Namespace (..),
+/// Track Name Length (vi64),
+/// Track Name (..),
+/// Number of Parameters (vi64),
+/// Parameters (..) ...
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscribeMessage {
-    /// このリクエストの一意な ID。応答メッセージとの対応付けに使われる。
+    /// Unique ID for this request. Used to correlate with response messages.
     pub request_id: u64,
-    /// 依存する先行リクエストとの ID 差分。最小実装では常に 0。
+    /// ID delta from a dependent prior request. Always 0 in this minimal implementation.
     pub required_request_id_delta: u64,
-    /// 購読対象のトラック名前空間。
+    /// Track namespace to subscribe to.
     pub track_namespace: TrackNamespace,
-    /// 購読対象のトラック名。名前空間と組み合わせてトラックを一意に特定する。
+    /// Track name. Combined with namespace, uniquely identifies a track.
     pub track_name: Vec<u8>,
-    /// 購読パラメータ（フィルタ、優先度など）。
+    /// Subscription parameters (filter, priority, etc.).
     pub parameters: Vec<MessageParameter>,
 }
 
@@ -47,10 +49,10 @@ impl SubscribeMessage {
         encode_varint(self.request_id, &mut payload);
         encode_varint(self.required_request_id_delta, &mut payload);
         encode_track_namespace(&self.track_namespace, &mut payload)?;
-        // Track Name は長さ付きバイト列
+        // Track Name is a length-prefixed byte sequence
         encode_varint(self.track_name.len() as u64, &mut payload);
         payload.extend_from_slice(&self.track_name);
-        encode_parameters(&self.parameters, &mut payload);
+        encode_parameters(&self.parameters, &mut payload)?;
         encode_message(MSG_SUBSCRIBE, &payload, buf);
         Ok(())
     }
@@ -136,5 +138,13 @@ mod tests {
             parameters: vec![],
         };
         roundtrip(&msg);
+    }
+
+    #[test]
+    fn wrong_message_type_is_error() {
+        let mut buf = Vec::new();
+        encode_message(0x07, &[], &mut buf); // REQUEST_OK type, not SUBSCRIBE
+        let mut slice = buf.as_slice();
+        assert!(SubscribeMessage::decode(&mut slice).is_err());
     }
 }

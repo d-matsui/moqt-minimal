@@ -1,11 +1,11 @@
-//! # request_error: REQUEST_ERROR メッセージ
+//! # request_error: REQUEST_ERROR message (Section 9.7)
 //!
-//! SUBSCRIBE 等のリクエストに対するエラー応答。
-//! エラーコード、リトライ間隔、人間が読めるエラー理由を含む。
+//! Error response to requests such as SUBSCRIBE.
+//! Contains an error code, retry interval, and a human-readable reason.
 //!
-//! ## 主なエラーコード
-//! - `0x00`: INTERNAL_ERROR（内部エラー）
-//! - `0x10`: DOES_NOT_EXIST（対象が存在しない）
+//! ## Common error codes
+//! - `0x00`: INTERNAL_ERROR
+//! - `0x10`: DOES_NOT_EXIST
 
 use anyhow::{Result, ensure};
 
@@ -13,14 +13,23 @@ use super::{MSG_REQUEST_ERROR, decode_message, encode_message};
 use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
 use crate::wire::varint::{decode_varint, encode_varint};
 
-/// REQUEST_ERROR メッセージ。リクエストの失敗を示す。
+/// REQUEST_ERROR message. Indicates that a request has failed.
+///
+/// ```text
+/// Type (vi64) = 0x5,
+/// Length (u16),
+/// Error Code (vi64),
+/// Retry Interval (vi64),
+/// Reason Phrase Length (vi64),
+/// Reason Phrase Value (..)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestErrorMessage {
-    /// エラーコード（仕様定義の値）。
+    /// Error code (spec-defined values).
     pub error_code: u64,
-    /// リトライ可能な場合のリトライ間隔。0 はリトライ不可を示す。
+    /// Retry interval in milliseconds. 0 means no retry.
     pub retry_interval: u64,
-    /// 人間が読めるエラー理由（デバッグ用）。
+    /// Human-readable error reason (for debugging).
     pub reason_phrase: ReasonPhrase,
 }
 
@@ -84,5 +93,13 @@ mod tests {
         let mut slice = buf.as_slice();
         let decoded = RequestErrorMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn wrong_message_type_is_error() {
+        let mut buf = Vec::new();
+        encode_message(0x06, &[], &mut buf);
+        let mut slice = buf.as_slice();
+        assert!(RequestErrorMessage::decode(&mut slice).is_err());
     }
 }
