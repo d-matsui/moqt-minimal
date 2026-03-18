@@ -119,6 +119,21 @@ mod tests {
     }
 
     #[test]
+    fn track_properties_preserved() {
+        let raw_props = vec![0x02, 0x05, 0x00, 0x10]; // arbitrary bytes
+        let msg = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+            track_properties_raw: raw_props.clone(),
+        };
+        let mut buf = Vec::new();
+        msg.encode(&mut buf).unwrap();
+        let mut slice = buf.as_slice();
+        let decoded = SubscribeOkMessage::decode(&mut slice).unwrap();
+        assert_eq!(decoded.track_properties_raw, raw_props);
+    }
+
+    #[test]
     fn wrong_message_type_is_error() {
         let mut buf = Vec::new();
         encode_message(0x03, &[], &mut buf);
