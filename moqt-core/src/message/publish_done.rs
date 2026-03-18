@@ -1,7 +1,8 @@
 //! # publish_done: PUBLISH_DONE message (Section 9.13)
 //!
-//! Sent by a publisher to notify that it is done publishing objects
-//! for a subscription. The relay forwards this to related subscribers.
+//! Sent by a publisher on the SUBSCRIBE bidi stream to notify that it is
+//! done publishing objects for that subscription. The relay forwards this
+//! to related subscribers.
 //!
 //! ## Common status codes
 //! - `0x0`: INTERNAL_ERROR
