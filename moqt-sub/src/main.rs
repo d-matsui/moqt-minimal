@@ -17,13 +17,13 @@
 use std::io::Write;
 use std::net::SocketAddr;
 
-use moqt_core::data::object::{ObjectHeader, resolve_object_id};
-use moqt_core::data::subgroup_header::SubgroupHeader;
+use moqt_core::data::object::resolve_object_id;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
+use moqt_core::session::data_stream::DataStreamReader;
 use moqt_core::session::request_stream::{
     RequestMessage, RequestStreamReader, RequestStreamWriter,
 };
@@ -127,82 +127,57 @@ async fn main() -> anyhow::Result<()> {
 
         loop {
             match conn.accept_uni().await {
-                Ok(mut uni_recv) => {
-                    let mut all_data = Vec::new();
-                    let mut tmp = vec![0u8; 4096];
-                    loop {
-                        match uni_recv.read(&mut tmp).await {
-                            Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-                            Ok(None) => break,
-                            Err(e) => {
-                                eprintln!("read error: {e}");
-                                return;
-                            }
+                Ok(uni_recv) => {
+                    let mut data_reader = DataStreamReader::new(uni_recv);
+
+                    let header = match data_reader.read_subgroup_header().await {
+                        Ok((h, _raw)) => h,
+                        Err(e) => {
+                            eprintln!("decode error: {e}");
+                            continue;
                         }
-                    }
+                    };
 
-                    if all_data.is_empty() {
-                        continue;
-                    }
-
-                    let mut data = all_data.as_slice();
-                    match SubgroupHeader::decode(&mut data) {
-                        Ok(header) => {
-                            if pipe_mode {
-                                // Pipe mode: write IVF container to stdout
-                                let mut out = stdout.lock();
-
-                                // Write IVF file header once
-                                if !ivf_header_written {
-                                    let mut ivf_hdr = [0u8; 32];
-                                    ivf_hdr[0..4].copy_from_slice(b"DKIF"); // signature
-                                    ivf_hdr[4..6].copy_from_slice(&0u16.to_le_bytes()); // version
-                                    ivf_hdr[6..8].copy_from_slice(&32u16.to_le_bytes()); // header length
-                                    ivf_hdr[8..12].copy_from_slice(b"VP80"); // codec FourCC
-                                    ivf_hdr[12..14].copy_from_slice(&320u16.to_le_bytes()); // width
-                                    ivf_hdr[14..16].copy_from_slice(&240u16.to_le_bytes()); // height
-                                    ivf_hdr[16..20].copy_from_slice(&30u32.to_le_bytes()); // framerate num
-                                    ivf_hdr[20..24].copy_from_slice(&1u32.to_le_bytes()); // framerate den
-                                    // bytes 24-31: frame count + unused (leave as 0)
-                                    let _ = out.write_all(&ivf_hdr);
-                                    ivf_header_written = true;
-                                }
-
-                                // Write each Object as an IVF frame
-                                while !data.is_empty() {
-                                    if let Ok(obj) = ObjectHeader::decode(&mut data, false) {
-                                        let payload = &data[..obj.payload_length as usize];
-                                        data = &data[obj.payload_length as usize..];
-
-                                        // IVF frame header: size (4) + timestamp (8)
-                                        let size = payload.len() as u32;
-                                        let _ = out.write_all(&size.to_le_bytes());
-                                        let _ = out.write_all(&frame_index.to_le_bytes());
-                                        let _ = out.write_all(payload);
-                                        let _ = out.flush();
-                                        frame_index += 1;
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            } else {
-                                // Demo mode: print human-readable
-                                eprintln!(
-                                    "  Group {} (alias={}):",
-                                    header.group_id, header.track_alias
-                                );
-                                let mut prev_id: Option<u64> = None;
-                                while !data.is_empty() {
-                                    let obj = ObjectHeader::decode(&mut data, false).unwrap();
-                                    let id = resolve_object_id(prev_id, obj.object_id_delta);
-                                    let payload = &data[..obj.payload_length as usize];
-                                    data = &data[obj.payload_length as usize..];
-                                    eprintln!("    Object {id}: {} bytes", payload.len());
-                                    prev_id = Some(id);
-                                }
-                            }
+                    if pipe_mode {
+                        // Pipe mode: write IVF container to stdout
+                        // Write IVF file header once
+                        if !ivf_header_written {
+                            let mut ivf_hdr = [0u8; 32];
+                            ivf_hdr[0..4].copy_from_slice(b"DKIF");
+                            ivf_hdr[4..6].copy_from_slice(&0u16.to_le_bytes());
+                            ivf_hdr[6..8].copy_from_slice(&32u16.to_le_bytes());
+                            ivf_hdr[8..12].copy_from_slice(b"VP80");
+                            ivf_hdr[12..14].copy_from_slice(&320u16.to_le_bytes());
+                            ivf_hdr[14..16].copy_from_slice(&240u16.to_le_bytes());
+                            ivf_hdr[16..20].copy_from_slice(&30u32.to_le_bytes());
+                            ivf_hdr[20..24].copy_from_slice(&1u32.to_le_bytes());
+                            let _ = stdout.lock().write_all(&ivf_hdr);
+                            ivf_header_written = true;
                         }
-                        Err(e) => eprintln!("decode error: {e}"),
+
+                        // Write each Object as an IVF frame
+                        while let Ok(Some((_obj, payload, _raw))) = data_reader.read_object().await
+                        {
+                            let mut out = stdout.lock();
+                            let size = payload.len() as u32;
+                            let _ = out.write_all(&size.to_le_bytes());
+                            let _ = out.write_all(&frame_index.to_le_bytes());
+                            let _ = out.write_all(&payload);
+                            let _ = out.flush();
+                            frame_index += 1;
+                        }
+                    } else {
+                        // Demo mode: print human-readable
+                        eprintln!(
+                            "  Group {} (alias={}):",
+                            header.group_id, header.track_alias
+                        );
+                        let mut prev_id: Option<u64> = None;
+                        while let Ok(Some((obj, payload, _raw))) = data_reader.read_object().await {
+                            let id = resolve_object_id(prev_id, obj.object_id_delta);
+                            eprintln!("    Object {id}: {} bytes", payload.len());
+                            prev_id = Some(id);
+                        }
                     }
                 }
                 Err(quinn::ConnectionError::ApplicationClosed(_)) => break,

@@ -36,6 +36,7 @@ use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
+use moqt_core::session::data_stream::DataStreamWriter;
 use moqt_core::session::request_stream::{
     RequestMessage, RequestStreamReader, RequestStreamWriter,
 };
@@ -149,9 +150,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_secs(1)).await;
         eprintln!("Sent PUBLISH_DONE ({stream_count} streams). Exiting.");
     } else {
-        // === デモモード: ダミーデータを送信 ===
+        // === Demo mode: send dummy data ===
         for group_id in 0u64..5 {
-            let mut uni = connection.open_uni().await?;
+            let uni = connection.open_uni().await?;
+            let mut data_writer = DataStreamWriter::new(uni);
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
@@ -160,23 +162,18 @@ async fn main() -> anyhow::Result<()> {
                 subgroup_id: None,
                 publisher_priority: None,
             };
-            let mut data = Vec::new();
-            header.encode(&mut data);
+            data_writer.write_subgroup_header(&header).await?;
 
-            // 各グループに3つのオブジェクトを書き込む
             for obj_id in 0u64..3 {
                 let payload = format!("g{group_id}o{obj_id}");
                 let obj = ObjectHeader {
-                    object_id_delta: 0, // 連番なので常に 0
+                    object_id_delta: 0,
                     payload_length: payload.len() as u64,
                 };
-                obj.encode(&mut data);
-                data.extend_from_slice(payload.as_bytes());
+                data_writer.write_object(&obj, payload.as_bytes()).await?;
             }
 
-            uni.write_all(&data).await?;
-            // finish() でストリーム FIN を送り、グループの終了を示す
-            uni.finish()?;
+            data_writer.finish()?;
             eprintln!("Sent group {group_id} (3 objects)");
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
@@ -270,17 +267,15 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
 
     let mut group_id: u64 = 0;
     let mut object_id: u64 = 0;
-    let mut current_stream: Option<quinn::SendStream> = None;
+    let mut current_writer: Option<DataStreamWriter> = None;
     let mut stream_count: u64 = 0;
     let mut group_started = false;
 
     while let Some(frame) = frame_rx.recv().await {
-        // キーフレームが来たら新しい Group を開始
-        // （最初のフレーム以外で、かつキーフレームの場合）
+        // Start a new Group on each keyframe (except the very first frame)
         if frame.is_keyframe && group_started {
-            // 前の Group のストリームを FIN で閉じる
-            if let Some(mut stream) = current_stream.take() {
-                stream.finish()?;
+            if let Some(mut writer) = current_writer.take() {
+                writer.finish()?;
             }
             stream_count += 1;
             eprintln!("Sent group {group_id} ({object_id} objects)");
@@ -288,9 +283,10 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
             object_id = 0;
         }
 
-        // 必要に応じて新しい QUIC uni ストリームを開く
-        if current_stream.is_none() {
-            let mut uni = conn.open_uni().await?;
+        // Open a new data stream if needed
+        if current_writer.is_none() {
+            let uni = conn.open_uni().await?;
+            let mut writer = DataStreamWriter::new(uni);
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
@@ -299,30 +295,25 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
                 subgroup_id: None,
                 publisher_priority: None,
             };
-            let mut header_buf = Vec::new();
-            header.encode(&mut header_buf);
-            uni.write_all(&header_buf).await?;
-            current_stream = Some(uni);
+            writer.write_subgroup_header(&header).await?;
+            current_writer = Some(writer);
             group_started = true;
         }
 
-        // VP8 フレーム = 1 MOQT Object として書き込む
-        if let Some(ref mut stream) = current_stream {
+        // Write VP8 frame as one MOQT Object
+        if let Some(ref mut writer) = current_writer {
             let obj = ObjectHeader {
-                object_id_delta: 0, // 連番なので常に 0
+                object_id_delta: 0,
                 payload_length: frame.data.len() as u64,
             };
-            let mut obj_buf = Vec::new();
-            obj.encode(&mut obj_buf);
-            stream.write_all(&obj_buf).await?;
-            stream.write_all(&frame.data).await?;
+            writer.write_object(&obj, &frame.data).await?;
             object_id += 1;
         }
     }
 
-    // 最後の Group のストリームを閉じる
-    if let Some(mut stream) = current_stream.take() {
-        stream.finish()?;
+    // Close the last Group's stream
+    if let Some(mut writer) = current_writer.take() {
+        writer.finish()?;
         stream_count += 1;
         eprintln!("Sent group {group_id} ({object_id} objects)");
     }
