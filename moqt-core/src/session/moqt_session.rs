@@ -6,12 +6,15 @@
 use anyhow::{Result, bail};
 use quinn::Connection;
 
+use crate::message::parameter::MessageParameter;
 use crate::message::publish_namespace::PublishNamespaceMessage;
 use crate::message::setup::{SetupMessage, SetupOption};
+use crate::message::subscribe::SubscribeMessage;
 use crate::primitives::track_namespace::TrackNamespace;
 use crate::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use crate::session::request_id::RequestIdAllocator;
 use crate::session::request_stream::{RequestMessage, RequestStreamReader, RequestStreamWriter};
+use crate::session::subscription::Subscription;
 
 /// A MOQT session over a QUIC connection.
 /// Created after SETUP exchange is complete.
@@ -89,6 +92,41 @@ impl MoqtSession {
                 )
             }
             _ => bail!("unexpected response to PUBLISH_NAMESPACE"),
+        }
+    }
+
+    /// Subscribe to a track.
+    /// Opens a bidi stream, sends SUBSCRIBE, and waits for SUBSCRIBE_OK.
+    /// Returns a `Subscription` that can be used to receive PUBLISH_DONE.
+    pub async fn subscribe(
+        &mut self,
+        namespace: TrackNamespace,
+        track_name: Vec<u8>,
+        parameters: Vec<MessageParameter>,
+    ) -> Result<Subscription> {
+        let (send, recv) = self.connection.open_bi().await?;
+        let mut writer = RequestStreamWriter::new(send);
+        let mut reader = RequestStreamReader::new(recv);
+
+        let msg = SubscribeMessage {
+            request_id: self.request_id_alloc.allocate(),
+            required_request_id_delta: 0,
+            track_namespace: namespace,
+            track_name,
+            parameters,
+        };
+        writer.write_subscribe(&msg).await?;
+
+        let response = reader.read_message().await?;
+        match response {
+            RequestMessage::SubscribeOk(ok) => Ok(Subscription::new(ok.track_alias, reader)),
+            RequestMessage::RequestError(err) => {
+                bail!(
+                    "SUBSCRIBE rejected: {}",
+                    String::from_utf8_lossy(&err.reason_phrase.value)
+                )
+            }
+            _ => bail!("unexpected response to SUBSCRIBE"),
         }
     }
 

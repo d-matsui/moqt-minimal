@@ -19,13 +19,9 @@ use std::net::SocketAddr;
 
 use moqt_core::data::object::resolve_object_id;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::DataStreamReader;
 use moqt_core::session::moqt_session::MoqtSession;
-use moqt_core::session::request_stream::{
-    RequestMessage, RequestStreamReader, RequestStreamWriter,
-};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -67,42 +63,29 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // SETUP exchange
-    let session = MoqtSession::connect(connection.clone()).await?;
+    let mut session = MoqtSession::connect(connection.clone()).await?;
     let connection = session.connection().clone();
     if !pipe_mode {
         eprintln!("SETUP exchange complete.");
     }
 
     // SUBSCRIBE
-    let (sub_send, sub_recv) = connection.open_bi().await?;
-    let mut sub_writer = RequestStreamWriter::new(sub_send);
-    let mut sub_reader = RequestStreamReader::new(sub_recv);
-    let subscribe = SubscribeMessage {
-        request_id: 0,
-        required_request_id_delta: 0,
-        track_namespace: TrackNamespace {
-            fields: vec![namespace.as_bytes().to_vec()],
-        },
-        track_name: track_name.as_bytes().to_vec(),
-        parameters: vec![MessageParameter::SubscriptionFilter(
-            SubscriptionFilter::NextGroupStart,
-        )],
+    let ns = TrackNamespace {
+        fields: vec![namespace.as_bytes().to_vec()],
     };
-    sub_writer.write_subscribe(&subscribe).await?;
-    if !pipe_mode {
-        eprintln!("Sent SUBSCRIBE.");
-    }
-
-    // Read SUBSCRIBE_OK
-    let sub_msg = sub_reader.read_message().await?;
-    let subscribe_ok = match sub_msg {
-        RequestMessage::SubscribeOk(ok) => ok,
-        _ => anyhow::bail!("expected SUBSCRIBE_OK"),
-    };
+    let mut subscription = session
+        .subscribe(
+            ns,
+            track_name.as_bytes().to_vec(),
+            vec![MessageParameter::SubscriptionFilter(
+                SubscriptionFilter::NextGroupStart,
+            )],
+        )
+        .await?;
     if !pipe_mode {
         eprintln!(
             "Received SUBSCRIBE_OK (alias={}).",
-            subscribe_ok.track_alias
+            subscription.track_alias
         );
     }
 
@@ -179,11 +162,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Wait for PUBLISH_DONE
-    let done_msg = sub_reader.read_message().await?;
-    let publish_done = match done_msg {
-        RequestMessage::PublishDone(done) => done,
-        _ => anyhow::bail!("expected PUBLISH_DONE"),
-    };
+    let publish_done = subscription.recv_publish_done().await?;
     if !pipe_mode {
         eprintln!(
             "Received PUBLISH_DONE (status={}, streams={}).",

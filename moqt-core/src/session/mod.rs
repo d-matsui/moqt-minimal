@@ -17,3 +17,4 @@ pub mod quic_config;
 pub mod request_id;
 pub mod request_stream;
 pub mod stream_utils;
+pub mod subscription;
