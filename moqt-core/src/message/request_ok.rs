@@ -1,12 +1,11 @@
 //! # request_ok: REQUEST_OK message (Section 9.6)
 //!
 //! Success response to requests such as PUBLISH_NAMESPACE.
-//! This minimal implementation does not include any parameters.
 
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_OK, decode_message, encode_message};
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::message::parameter::{decode_parameters, encode_parameters};
 
 /// REQUEST_OK message. Indicates that a request was successful.
 ///
@@ -18,16 +17,15 @@ use crate::primitives::varint::{decode_varint, encode_varint};
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestOkMessage {
-    // Parameters: LARGEST_OBJECT (0x09) can appear here when responding to
-    // REQUEST_UPDATE or TRACK_STATUS, but this minimal implementation only
-    // uses REQUEST_OK for PUBLISH_NAMESPACE responses, so count = 0.
+    // Parameters (Section 9.3): LARGEST_OBJECT (0x09) can appear here.
+    // This implementation always encodes with count = 0; on decode,
+    // parameter handling is delegated to decode_parameters.
 }
 
 impl RequestOkMessage {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         let mut payload = Vec::new();
-        // Parameter count = 0 (minimal implementation)
-        encode_varint(0, &mut payload);
+        encode_parameters(&[], &mut payload).expect("empty params never fail");
         encode_message(MSG_REQUEST_OK, &payload, buf);
     }
 
@@ -38,11 +36,7 @@ impl RequestOkMessage {
             "expected REQUEST_OK (0x{MSG_REQUEST_OK:X}), got 0x{msg_type:X}"
         );
         let mut p = payload.as_slice();
-        let num_params = decode_varint(&mut p)?;
-        ensure!(
-            num_params == 0,
-            "parameters not supported in minimal implementation"
-        );
+        let _params = decode_parameters(&mut p)?;
         Ok(RequestOkMessage {})
     }
 }
@@ -71,14 +65,19 @@ mod tests {
     }
 
     #[test]
-    fn nonzero_params_is_error() {
+    fn decode_with_parameters() {
+        use crate::primitives::varint::encode_varint;
+        // A REQUEST_OK with a LARGEST_OBJECT parameter.
+        // decode_parameters reads it into the result; decode should succeed.
         let mut payload = Vec::new();
         encode_varint(1, &mut payload); // parameter count = 1
-        encode_varint(0x09, &mut payload); // fake parameter type
-        encode_varint(0, &mut payload); // fake parameter value
+        encode_varint(0x09, &mut payload); // delta = LARGEST_OBJECT type
+        encode_varint(5, &mut payload); // group
+        encode_varint(3, &mut payload); // object
         let mut buf = Vec::new();
         encode_message(MSG_REQUEST_OK, &payload, &mut buf);
         let mut slice = buf.as_slice();
-        assert!(RequestOkMessage::decode(&mut slice).is_err());
+        let decoded = RequestOkMessage::decode(&mut slice).unwrap();
+        assert_eq!(decoded, RequestOkMessage {});
     }
 }

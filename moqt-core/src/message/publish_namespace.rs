@@ -11,6 +11,7 @@
 use anyhow::{Result, ensure};
 
 use super::{MSG_PUBLISH_NAMESPACE, decode_message, encode_message};
+use crate::message::parameter::{decode_parameters, encode_parameters};
 use crate::primitives::track_namespace::{
     TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
@@ -34,8 +35,9 @@ pub struct PublishNamespaceMessage {
     pub required_request_id_delta: u64,
     /// The namespace to register.
     pub track_namespace: TrackNamespace,
-    // Parameters: AUTHORIZATION TOKEN (0x03) can appear here per the spec,
-    // but this minimal implementation does not support auth, so count = 0.
+    // Parameters (Section 9.3): AUTHORIZATION_TOKEN (0x03) can appear here.
+    // This implementation always encodes with count = 0; on decode,
+    // parameter handling is delegated to decode_parameters.
 }
 
 impl PublishNamespaceMessage {
@@ -44,8 +46,7 @@ impl PublishNamespaceMessage {
         encode_varint(self.request_id, &mut payload);
         encode_varint(self.required_request_id_delta, &mut payload);
         encode_track_namespace(&self.track_namespace, &mut payload)?;
-        // Parameter count = 0 (minimal implementation)
-        encode_varint(0, &mut payload);
+        encode_parameters(&[], &mut payload)?;
         encode_message(MSG_PUBLISH_NAMESPACE, &payload, buf);
         Ok(())
     }
@@ -60,11 +61,7 @@ impl PublishNamespaceMessage {
         let request_id = decode_varint(&mut p)?;
         let required_request_id_delta = decode_varint(&mut p)?;
         let track_namespace = decode_track_namespace(&mut p)?;
-        let num_params = decode_varint(&mut p)?;
-        ensure!(
-            num_params == 0,
-            "parameters not supported in minimal implementation"
-        );
+        let _params = decode_parameters(&mut p)?;
         Ok(PublishNamespaceMessage {
             request_id,
             required_request_id_delta,
@@ -106,6 +103,28 @@ mod tests {
         let mut slice = buf.as_slice();
         let decoded = PublishNamespaceMessage::decode(&mut slice).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn decode_with_skipped_parameters() {
+        // A PUBLISH_NAMESPACE with an AUTHORIZATION_TOKEN parameter.
+        // decode_parameters skips unknown-to-us params, so decode should succeed.
+        use crate::primitives::varint::encode_varint;
+        let mut payload = Vec::new();
+        encode_varint(0, &mut payload); // request_id
+        encode_varint(0, &mut payload); // required_request_id_delta
+        encode_varint(1, &mut payload); // namespace field count
+        encode_varint(3, &mut payload); // field length
+        payload.extend_from_slice(b"app"); // field value
+        encode_varint(1, &mut payload); // num_params = 1
+        encode_varint(0x03, &mut payload); // delta = AUTHORIZATION_TOKEN type
+        encode_varint(4, &mut payload); // token length
+        payload.extend_from_slice(b"test"); // token value
+        let mut buf = Vec::new();
+        encode_message(MSG_PUBLISH_NAMESPACE, &payload, &mut buf);
+        let mut slice = buf.as_slice();
+        let decoded = PublishNamespaceMessage::decode(&mut slice).unwrap();
+        assert_eq!(decoded.track_namespace.fields, vec![b"app".to_vec()]);
     }
 
     #[test]

@@ -40,7 +40,10 @@ impl ObjectHeader {
     pub fn decode(buf: &mut &[u8], has_properties: bool) -> Result<Self> {
         let object_id_delta = decode_varint(buf)?;
         let payload_length = decode_varint(buf)?;
-        // Skip Object Properties if present (length-prefixed Key-Value-Pairs)
+        // Skip Object Properties if present (length-prefixed Key-Value-Pairs).
+        // Properties (e.g. PRIOR_GROUP_ID_GAP, PRIOR_OBJECT_ID_GAP) are defined
+        // in Section 11. The relay transfers Object data as raw bytes, so
+        // properties are preserved without being decoded here.
         if has_properties {
             let props_len = decode_varint(buf)? as usize;
             ensure!(buf.len() >= props_len, "object properties truncated");

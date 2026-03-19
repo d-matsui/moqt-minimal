@@ -1,21 +1,29 @@
-//! # parameter: Message Parameters for SUBSCRIBE and other messages (Section 9.3)
+//! # parameter: Message Parameters (Section 9.3)
 //!
-//! Messages such as SUBSCRIBE and SUBSCRIBE_OK can carry parameters that
-//! control subscription behavior. Uses delta encoding like key_value_pair.
+//! Control messages such as SUBSCRIBE and SUBSCRIBE_OK carry optional
+//! parameters that modify request behavior. Each parameter has a
+//! spec-defined type ID and a type-specific value encoding (uint8,
+//! varint, Location, or length-prefixed). Parameters are serialized
+//! in ascending order by type, using delta encoding for the type ID.
 //!
-//! ## Parameters supported in this minimal implementation
-//! - `SUBSCRIPTION_FILTER` (0x21): Filter for subscription start position (e.g. next group start)
-//! - `LARGEST_OBJECT` (0x09): Largest object location the publisher has
-//! - `FORWARD` (0x10): Forward direction (0 or 1)
+//! The spec defines 10 parameter types. This module fully decodes
+//! the 3 types used by this implementation into enum variants:
+//! - SUBSCRIPTION_FILTER (0x21): subscription start position
+//! - LARGEST_OBJECT (0x09): largest published location
+//! - FORWARD (0x10): forwarding state (0 or 1)
 //!
-//! ## Parameters defined in the spec but not supported
-//! - `DELIVERY_TIMEOUT` (0x02)
-//! - `AUTHORIZATION_TOKEN` (0x03)
-//! - `RENDEZVOUS_TIMEOUT` (0x04)
-//! - `EXPIRES` (0x08)
-//! - `SUBSCRIBER_PRIORITY` (0x20)
-//! - `GROUP_ORDER` (0x22)
-//! - `NEW_GROUP_REQUEST` (0x32)
+//! The remaining 7 spec-defined types are read and skipped based on
+//! their wire encoding so the decoder can advance past them without
+//! error. Parameters are not forwarded by relays (Section 9.3.1),
+//! so discarding unused parameters is correct.
+//!
+//! An unknown type (not defined in the spec) causes a decode error,
+//! per Section 9.3: "An endpoint that receives an unknown Message
+//! Parameter MUST close the session with PROTOCOL_VIOLATION."
+//!
+//! Encode supports the 3 enum variants only. SUBSCRIPTION_FILTER
+//! encode handles NextGroupStart only; other filter types are decoded
+//! but not encoded because this implementation does not originate them.
 
 use anyhow::{Result, bail, ensure};
 
@@ -33,12 +41,7 @@ pub const PARAM_SUBSCRIPTION_FILTER: u64 = 0x21;
 pub const PARAM_GROUP_ORDER: u64 = 0x22;
 pub const PARAM_NEW_GROUP_REQUEST: u64 = 0x32;
 
-/// Message parameter.
-/// Supported parameters are decoded into enum variants.
-/// Unsupported but spec-defined parameters are skipped during decode.
-/// Unknown parameters (not in the spec) cause a decode error,
-/// per the spec: "An endpoint that receives an unknown Message Parameter
-/// MUST close the session with PROTOCOL_VIOLATION."
+/// Message parameter carried in control messages (Section 9.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageParameter {
     /// SUBSCRIPTION_FILTER (0x21): Subscription filter.
@@ -51,7 +54,7 @@ pub enum MessageParameter {
     Forward(u8),
 }
 
-/// Subscription filter type (Section 5.1.3).
+/// Subscription filter type (Section 5.1.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscriptionFilter {
     /// 0x1: Start receiving from the beginning of the next group.
@@ -78,7 +81,7 @@ pub enum SubscriptionFilter {
 ///
 /// Each parameter (Figure 4):
 ///   Type Delta (vi64),
-///   Value (..)
+///   Value (..)              // encoding varies per parameter type
 /// ```
 pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) -> Result<()> {
     encode_varint(params.len() as u64, buf);
@@ -94,7 +97,7 @@ pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) -> Resu
         encode_varint(delta, buf);
         match param {
             MessageParameter::SubscriptionFilter(filter) => {
-                // SUBSCRIPTION_FILTER (Section 5.1.3) is length-prefixed:
+                // SUBSCRIPTION_FILTER (Section 9.3.7) is length-prefixed:
                 //   Length (vi64),
                 //   Subscription Filter {
                 //     Filter Type (vi64),
@@ -121,7 +124,6 @@ pub fn encode_parameters(params: &[MessageParameter], buf: &mut Vec<u8>) -> Resu
             }
             MessageParameter::Forward(v) => {
                 // FORWARD (Section 9.3.10): uint8
-                //   Value (u8)
                 buf.push(*v);
             }
         }
@@ -186,9 +188,10 @@ pub fn decode_parameters(buf: &mut &[u8]) -> Result<Vec<MessageParameter>> {
                 *buf = &buf[1..];
                 MessageParameter::Forward(v)
             }
-            // Defined in the spec but not handled by this implementation.
-            // Skip the value based on its wire format so we don't error
-            // on valid parameters from other implementations.
+            // Spec-defined parameters not used by this implementation.
+            // Read and skip based on their wire encoding so the decoder
+            // can advance past them. These parameters are not forwarded
+            // by relays (Section 9.3.1), so discarding is correct.
             PARAM_DELIVERY_TIMEOUT => {
                 // varint (Section 9.3.3)
                 let _ = decode_varint(buf)?;
@@ -202,8 +205,7 @@ pub fn decode_parameters(buf: &mut &[u8]) -> Result<Vec<MessageParameter>> {
                 continue;
             }
             PARAM_RENDEZVOUS_TIMEOUT => {
-                // varint (Section 9.3.4, format not explicitly stated but
-                // consistent with other timeout parameters)
+                // varint (Section 9.3.4)
                 let _ = decode_varint(buf)?;
                 continue;
             }

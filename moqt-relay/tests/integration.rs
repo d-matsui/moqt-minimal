@@ -282,6 +282,9 @@ async fn object_forwarding() {
             track_alias: 1,
             group_id: 0,
             has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
         };
         let mut data = Vec::new();
         header.encode(&mut data);
@@ -408,6 +411,9 @@ async fn publish_done_forwarding() {
             track_alias: 1,
             group_id: 0,
             has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
         };
         let mut data = Vec::new();
         header.encode(&mut data);
@@ -504,6 +510,9 @@ async fn multiple_groups() {
                 track_alias: 1,
                 group_id,
                 has_properties: false,
+                end_of_group: true,
+                subgroup_id: None,
+                publisher_priority: None,
             };
             let mut data = Vec::new();
             header.encode(&mut data);
@@ -652,6 +661,9 @@ async fn late_join() {
                 track_alias: 1,
                 group_id,
                 has_properties: false,
+                end_of_group: true,
+                subgroup_id: None,
+                publisher_priority: None,
             };
             let mut data = Vec::new();
             header.encode(&mut data);
@@ -849,6 +861,9 @@ async fn multiple_subscribers() {
             track_alias: 1,
             group_id: 0,
             has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
         };
         let mut data = Vec::new();
         header.encode(&mut data);
@@ -987,6 +1002,9 @@ async fn multiple_tracks() {
             track_alias: 1,
             group_id: 0,
             has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
         }
         .encode(&mut data_v);
         ObjectHeader {
@@ -1005,6 +1023,9 @@ async fn multiple_tracks() {
             track_alias: 2,
             group_id: 0,
             has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
         }
         .encode(&mut data_a);
         ObjectHeader {
@@ -1134,6 +1155,9 @@ async fn subscriber_disconnect() {
                 track_alias: 1,
                 group_id,
                 has_properties: false,
+                end_of_group: true,
+                subgroup_id: None,
+                publisher_priority: None,
             }
             .encode(&mut data);
             ObjectHeader {
