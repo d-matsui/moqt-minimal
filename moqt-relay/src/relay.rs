@@ -39,18 +39,19 @@ use anyhow::{Result, bail};
 use quinn::{Connection, Endpoint};
 use tokio::sync::Mutex;
 
+use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::request_error::RequestErrorMessage;
-use moqt_core::message::request_ok::RequestOkMessage;
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
-use moqt_core::session::moqt_session::MoqtSession;
+use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
 use moqt_core::session::request_id::RequestIdAllocator;
 use moqt_core::session::request_stream::{
     RequestMessage, RequestStreamReader, RequestStreamWriter,
 };
+use moqt_core::session::subscribe_request::SubscribeRequest;
 
 /// Unique identifier for a session. Assigned sequentially per connection.
 type SessionId = u64;
@@ -99,9 +100,9 @@ struct SubscriptionEntry {
     publisher_track_alias: u64,
     #[allow(dead_code)]
     subscriber_track_alias: u64,
-    /// Write side of the subscriber's bidi stream.
+    /// Subscriber's request handle.
     /// Used to forward PUBLISH_DONE.
-    subscriber_bidi_send: Arc<Mutex<RequestStreamWriter>>,
+    subscriber_bidi_send: Arc<Mutex<SubscribeRequest>>,
 }
 
 impl Relay {
@@ -154,44 +155,36 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
 
     // === SETUP exchange ===
     let session = MoqtSession::accept(connection.clone()).await?;
-    let connection = session.connection().clone();
 
-    // === Main loop: process bidi and uni streams concurrently ===
-    // Use tokio::select! to await both simultaneously and process whichever arrives first.
-    // bidi: control messages (PUBLISH_NAMESPACE, SUBSCRIBE)
-    // uni: data streams (SubgroupHeader + Objects)
+    // === Main loop: process requests and data streams concurrently ===
     loop {
         tokio::select! {
-            bidi = connection.accept_bi() => {
-                match bidi {
-                    Ok((send, recv)) => {
+            request = session.next_request() => {
+                match request {
+                    Ok(event) => {
                         let state = state.clone();
-                        let conn = connection.clone();
+                        let conn = session.connection().clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_request_stream(session_id, send, recv, state, conn).await {
-                                eprintln!("bidi stream error: {e}");
+                            if let Err(e) = handle_request_event(session_id, event, state, conn).await {
+                                eprintln!("request error: {e}");
                             }
                         });
                     }
-                    Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
-                    Err(quinn::ConnectionError::LocallyClosed) => break,
-                    Err(e) => return Err(e.into()),
+                    Err(_) => break,
                 }
             }
-            uni = connection.accept_uni() => {
-                match uni {
-                    Ok(recv) => {
+            data = session.accept_data_stream() => {
+                match data {
+                    Ok((header, reader)) => {
                         let state = state.clone();
                         let sid = session_id;
                         tokio::spawn(async move {
-                            if let Err(e) = handle_data_stream(sid, recv, state).await {
-                                eprintln!("uni stream error: {e}");
+                            if let Err(e) = handle_data_stream(sid, header, reader, state).await {
+                                eprintln!("data stream error: {e}");
                             }
                         });
                     }
-                    Err(quinn::ConnectionError::ApplicationClosed(_)) => break,
-                    Err(quinn::ConnectionError::LocallyClosed) => break,
-                    Err(e) => return Err(e.into()),
+                    Err(_) => break,
                 }
             }
         }
@@ -216,7 +209,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
 /// Process a unidirectional data stream from a publisher and relay it to subscribers.
 ///
 /// ## Relay flow
-/// 1. Read the SubgroupHeader and identify the target subscription from the Track Alias
+/// 1. Identify the target subscription from the Track Alias in the SubgroupHeader
 /// 2. Open new uni streams to all subscribers
 /// 3. Forward the SubgroupHeader to subscribers
 /// 4. Read objects one by one and immediately forward them to subscribers
@@ -224,13 +217,10 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
 /// 5. Propagate stream termination (FIN) to subscribers
 async fn handle_data_stream(
     sender_session: SessionId,
-    recv: quinn::RecvStream,
+    header: SubgroupHeader,
+    mut data_reader: DataStreamReader,
     state: Arc<Mutex<RelayState>>,
 ) -> Result<()> {
-    let mut data_reader = DataStreamReader::new(recv);
-
-    // === Read and validate SubgroupHeader ===
-    let (header, header_bytes) = data_reader.read_subgroup_header().await?;
     let track_alias = header.track_alias;
 
     // === Identify subscribers and open downstream streams ===
@@ -270,14 +260,14 @@ async fn handle_data_stream(
     }
 
     // === Forward SubgroupHeader ===
-    // Write the raw bytes as-is to subscribers
+    // Re-encode the header and write to subscribers
     let subscriber_writers: Vec<Arc<Mutex<DataStreamWriter>>> = subscriber_writers
         .into_iter()
         .map(|w| Arc::new(Mutex::new(w)))
         .collect();
 
     for writer in &subscriber_writers {
-        writer.lock().await.write_raw(&header_bytes).await?;
+        writer.lock().await.write_subgroup_header(&header).await?;
     }
 
     // === Relay objects incrementally ===
@@ -304,34 +294,24 @@ async fn handle_data_stream(
     Ok(())
 }
 
-/// Handle a request (bidi) stream.
-/// Read the first message and dispatch to the appropriate handler.
-async fn handle_request_stream(
+/// Handle an incoming request event.
+async fn handle_request_event(
     session_id: SessionId,
-    send: quinn::SendStream,
-    recv: quinn::RecvStream,
+    event: RequestEvent,
     state: Arc<Mutex<RelayState>>,
     connection: Connection,
 ) -> Result<()> {
-    let mut reader = RequestStreamReader::new(recv);
-    let mut writer = RequestStreamWriter::new(send);
-    let msg = reader.read_message().await?;
-
-    match msg {
-        RequestMessage::PublishNamespace(pub_ns) => {
+    match event {
+        RequestEvent::PublishNamespace(mut request) => {
             {
                 let mut s = state.lock().await;
                 s.namespace_publishers
-                    .insert(pub_ns.track_namespace.clone(), session_id);
+                    .insert(request.message.track_namespace.clone(), session_id);
             }
-            let ok = RequestOkMessage {};
-            writer.write_request_ok(&ok).await?;
+            request.accept().await?;
         }
-        RequestMessage::Subscribe(subscribe) => {
-            handle_subscribe(session_id, subscribe, writer, state, connection).await?;
-        }
-        _ => {
-            bail!("unexpected message on request stream");
+        RequestEvent::Subscribe(request) => {
+            handle_subscribe(session_id, request, state, connection).await?;
         }
     }
 
@@ -349,12 +329,12 @@ async fn handle_request_stream(
 /// 7. Wait for PUBLISH_DONE from publisher and forward to subscriber
 async fn handle_subscribe(
     subscriber_session: SessionId,
-    msg: SubscribeMessage,
-    subscriber_writer: RequestStreamWriter,
+    request: SubscribeRequest,
     state: Arc<Mutex<RelayState>>,
     _subscriber_conn: Connection,
 ) -> Result<()> {
-    let subscriber_writer = Arc::new(Mutex::new(subscriber_writer));
+    let msg = request.message.clone();
+    let subscriber_request = Arc::new(Mutex::new(request));
 
     // === Filter check ===
     // This minimal implementation only supports NextGroupStart.
@@ -373,11 +353,7 @@ async fn handle_subscribe(
                 value: b"only NextGroupStart filter is supported".to_vec(),
             },
         };
-        subscriber_writer
-            .lock()
-            .await
-            .write_request_error(&err)
-            .await?;
+        subscriber_request.lock().await.reject(&err).await?;
         return Ok(());
     }
 
@@ -420,11 +396,7 @@ async fn handle_subscribe(
                         value: b"no publisher for namespace".to_vec(),
                     },
                 };
-                subscriber_writer
-                    .lock()
-                    .await
-                    .write_request_error(&err)
-                    .await?;
+                subscriber_request.lock().await.reject(&err).await?;
                 return Ok(());
             }
         }
@@ -468,15 +440,15 @@ async fn handle_subscribe(
             track_name: msg.track_name.clone(),
             publisher_track_alias: track_alias,
             subscriber_track_alias: track_alias,
-            subscriber_bidi_send: subscriber_writer.clone(),
+            subscriber_bidi_send: subscriber_request.clone(),
         });
     }
 
     // Forward SUBSCRIBE_OK to subscriber
-    subscriber_writer
+    subscriber_request
         .lock()
         .await
-        .write_subscribe_ok(&subscribe_ok)
+        .accept(&subscribe_ok)
         .await?;
 
     // === Wait for PUBLISH_DONE and forward ===
@@ -486,7 +458,7 @@ async fn handle_subscribe(
         _ => bail!("expected PUBLISH_DONE from publisher"),
     };
 
-    let subs_to_notify: Vec<Arc<Mutex<RequestStreamWriter>>> = {
+    let subs_to_notify: Vec<Arc<Mutex<SubscribeRequest>>> = {
         let s = state.lock().await;
         s.subscriptions
             .iter()
@@ -499,8 +471,8 @@ async fn handle_subscribe(
             .collect()
     };
 
-    for writer in subs_to_notify {
-        let _ = writer.lock().await.write_publish_done(&publish_done).await;
+    for req in subs_to_notify {
+        let _ = req.lock().await.send_publish_done(&publish_done).await;
     }
 
     Ok(())
