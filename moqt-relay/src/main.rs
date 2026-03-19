@@ -1,9 +1,9 @@
-//! # moqt-relay: MOQT リレーサーバーのエントリーポイント
+//! # moqt-relay: MOQT relay server entry point
 //!
-//! 自己署名証明書を生成し、QUIC サーバーとして起動する。
-//! デフォルトで `0.0.0.0:4433` をリッスンする。
+//! Generates a self-signed certificate and starts as a QUIC server.
+//! Listens on `0.0.0.0:4433` by default.
 //!
-//! ## 使い方
+//! ## Usage
 //! ```bash
 //! cargo run --bin moqt-relay
 //! ```
@@ -16,14 +16,14 @@ use moqt_core::session::quic_config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // rustls の暗号プロバイダを初期化（プロセスで1回だけ必要）
+    // Initialize the rustls crypto provider (required once per process)
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
 
     let addr: SocketAddr = "0.0.0.0:4433".parse()?;
 
-    // 開発用の自己署名証明書を生成
+    // Generate a self-signed certificate for development
     let rcgen::CertifiedKey { cert, key_pair } =
         rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
     let cert_der = rustls_pki_types::CertificateDer::from(cert);

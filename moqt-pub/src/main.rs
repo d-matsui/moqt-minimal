@@ -1,27 +1,27 @@
-//! # moqt-pub: MOQT パブリッシャー
+//! # moqt-pub: MOQT Publisher
 //!
-//! リレーサーバーに接続し、メディアデータを配信するクライアント。
-//! 2つのモードをサポートする:
+//! A client that connects to a relay server and publishes media data.
+//! Supports two modes:
 //!
-//! ## デモモード（デフォルト）
-//! ダミーデータ（文字列）を5グループ×3オブジェクトずつ送信する。
-//! プロトコルの動作確認に使用する。
+//! ## Demo mode (default)
+//! Sends dummy data (strings) as 5 groups x 3 objects each.
+//! Used for protocol behavior verification.
 //!
-//! ## パイプモード（`--pipe`）
-//! 標準入力から IVF コンテナ形式の VP8 映像を読み取り、
-//! MOQT オブジェクトとして配信する。ffmpeg 等と組み合わせて使う。
+//! ## Pipe mode (`--pipe`)
+//! Reads VP8 video in IVF container format from stdin
+//! and publishes it as MOQT objects. Used with ffmpeg, etc.
 //!
 //! ```bash
-//! # デモモード
+//! # Demo mode
 //! cargo run --bin moqt-pub
 //!
-//! # パイプモード（ffmpeg でカメラ映像を VP8/IVF に変換して配信）
+//! # Pipe mode (convert camera video to VP8/IVF with ffmpeg and publish)
 //! ffmpeg -f avfoundation -i "0" -c:v libvpx -f ivf - | cargo run --bin moqt-pub -- --pipe
 //! ```
 //!
-//! ## IVF → MOQT のマッピング
-//! - VP8 キーフレーム → 新しい Group の開始（独立してデコード可能な単位）
-//! - 各 VP8 フレーム → 1つの Object（Group 内の個々のデータ）
+//! ## IVF to MOQT mapping
+//! - VP8 keyframe -> start of a new Group (independently decodable unit)
+//! - Each VP8 frame -> one Object (individual data within a Group)
 
 use std::io::Read;
 use std::net::SocketAddr;
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("Failed to install crypto provider");
 
-    // コマンドライン引数の解析
+    // Parse command-line arguments
     let args: Vec<String> = std::env::args().collect();
     let pipe_mode = args.iter().any(|a| a == "--pipe");
     let relay_addr: SocketAddr = args
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.as_str())
         .unwrap_or("video");
 
-    // 証明書検証をスキップする QUIC クライアント設定（開発用）
+    // QUIC client config that skips certificate verification (for development)
     let client_config = make_insecure_client_config();
     let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())?;
     endpoint.set_default_client_config(client_config);
@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Sent SUBSCRIBE_OK (alias=1).");
 
     if pipe_mode {
-        // === パイプモード: 標準入力から IVF 映像を読み取って配信 ===
+        // === Pipe mode: read IVF video from stdin and publish ===
         let conn = connection.clone();
         let stream_count = send_from_stdin(conn, track_name).await?;
 
@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
             reason_phrase: ReasonPhrase { value: vec![] },
         };
         sub_writer.write_publish_done(&done).await?;
-        // データがフラッシュされるのを待ってから接続を閉じる
+        // Wait for data to be flushed before closing the connection
         tokio::time::sleep(Duration::from_secs(1)).await;
         eprintln!("Sent PUBLISH_DONE ({stream_count} streams). Exiting.");
     } else {
@@ -190,50 +190,50 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// IVF フレーム。キーフレームかどうかのフラグ付き。
+/// An IVF frame with a flag indicating whether it is a keyframe.
 struct IvfFrame {
     data: Vec<u8>,
     is_keyframe: bool,
 }
 
-/// 標準入力から IVF コンテナ形式の VP8 映像を読み取り、MOQT オブジェクトとして送信する。
+/// Reads VP8 video in IVF container format from stdin and sends it as MOQT objects.
 ///
-/// ## IVF (Indeo Video Format) コンテナの構造
-/// - ファイルヘッダー: 32 バイト（署名 "DKIF"、コーデック情報、解像度など）
-/// - フレームヘッダー: 12 バイト（フレームサイズ 4バイト LE + タイムスタンプ 8バイト LE）
-/// - フレームデータ: フレームサイズ分のバイト列
+/// ## IVF (Indeo Video Format) container structure
+/// - File header: 32 bytes (signature "DKIF", codec info, resolution, etc.)
+/// - Frame header: 12 bytes (frame size 4 bytes LE + timestamp 8 bytes LE)
+/// - Frame data: byte sequence of the frame size
 ///
-/// ## VP8 キーフレーム検出
-/// VP8 ビットストリームの最初のバイトのビット0が 0 ならキーフレーム。
-/// キーフレームは独立してデコードできるため、新しい Group の境界として使う。
-/// これにより、サブスクライバーがどのグループからでも再生を開始できる。
+/// ## VP8 keyframe detection
+/// If bit 0 of the first byte of the VP8 bitstream is 0, it is a keyframe.
+/// Keyframes can be decoded independently, so they are used as Group boundaries.
+/// This allows subscribers to start playback from any Group.
 ///
-/// ## MOQT へのマッピング
-/// - キーフレーム → 新しい Group（前の Group のストリームを FIN して新しいストリームを開く）
-/// - 各フレーム → 1つの Object（delta=0 で連番の Object ID）
+/// ## Mapping to MOQT
+/// - Keyframe -> new Group (FIN the previous Group's stream and open a new one)
+/// - Each frame -> one Object (sequential Object IDs with delta=0)
 async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::Result<u64> {
-    // ブロッキング I/O（stdin 読み取り）と非同期 I/O（QUIC 送信）を
-    // チャネルで橋渡しする。spawn_blocking でブロッキング読み取りを行い、
-    // メインタスクでは非同期にフレームを受信して送信する。
+    // Bridge blocking I/O (stdin reading) and async I/O (QUIC sending) via a channel.
+    // Use spawn_blocking for blocking reads, and receive frames asynchronously
+    // in the main task for sending.
     let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<IvfFrame>(64);
 
-    // ブロッキングスレッド: 標準入力から IVF フレームを解析
+    // Blocking thread: parse IVF frames from stdin
     tokio::task::spawn_blocking(move || {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
 
-        // IVF ファイルヘッダー（32バイト）をスキップ
+        // Skip the IVF file header (32 bytes)
         let mut file_header = [0u8; 32];
         if reader.read_exact(&mut file_header).is_err() {
             eprintln!("failed to read IVF file header");
             return;
         }
 
-        // フレームを1つずつ読み取り、チャネルに送信
+        // Read frames one by one and send them to the channel
         loop {
-            // IVF フレームヘッダー: 12 バイト
-            //   バイト 0-3: フレームサイズ（リトルエンディアン u32）
-            //   バイト 4-11: タイムスタンプ（リトルエンディアン u64）
+            // IVF frame header: 12 bytes
+            //   Bytes 0-3: frame size (little-endian u32)
+            //   Bytes 4-11: timestamp (little-endian u64)
             let mut frame_header = [0u8; 12];
             if reader.read_exact(&mut frame_header).is_err() {
                 break; // EOF
@@ -245,15 +245,15 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
                 frame_header[3],
             ]) as usize;
 
-            // フレームデータを読み取り
+            // Read the frame data
             let mut data = vec![0u8; frame_size];
             if reader.read_exact(&mut data).is_err() {
                 break;
             }
 
-            // VP8 キーフレーム検出:
-            // VP8 ビットストリームの最初のバイトのビット0が 0 → キーフレーム
-            // ビット0が 1 → インターフレーム（前のフレームに依存）
+            // VP8 keyframe detection:
+            // If bit 0 of the first byte of the VP8 bitstream is 0 -> keyframe
+            // If bit 0 is 1 -> inter-frame (depends on previous frames)
             let is_keyframe = !data.is_empty() && (data[0] & 0x01) == 0;
 
             if frame_tx
@@ -321,16 +321,16 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
     Ok(stream_count)
 }
 
-/// 証明書検証をスキップする QUIC クライアント設定を作成する。
-/// 開発用。本番環境では使用しないこと。
+/// Creates a QUIC client config that skips certificate verification.
+/// For development only. Do not use in production.
 ///
-/// リレーサーバーが自己署名証明書を使うため、通常の証明書検証では
-/// 接続できない。この設定は全ての証明書を無条件で信頼する。
+/// Since the relay server uses a self-signed certificate, normal certificate
+/// verification would fail. This config unconditionally trusts all certificates.
 fn make_insecure_client_config() -> quinn::ClientConfig {
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use std::sync::Arc;
 
-    /// 全ての証明書を信頼するダミーの検証器。
+    /// A dummy verifier that trusts all certificates.
     #[derive(Debug)]
     struct SkipVerification;
 

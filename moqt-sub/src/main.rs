@@ -1,18 +1,18 @@
-//! # moqt-sub: MOQT サブスクライバー
+//! # moqt-sub: MOQT Subscriber
 //!
-//! リレーサーバーに接続し、メディアデータを受信するクライアント。
-//! 2つのモードをサポートする:
+//! A client that connects to a relay server and receives media data.
+//! Supports two modes:
 //!
-//! - **デフォルトモード**: 受信した Object を人間が読める形で stderr に表示
-//! - **パイプモード** (`--pipe`): 受信した VP8 フレームを IVF コンテナとして stdout に出力
-//!   ffplay にパイプすることでリアルタイム再生ができる:
+//! - **Default mode**: Prints received Objects in human-readable form to stderr
+//! - **Pipe mode** (`--pipe`): Outputs received VP8 frames as an IVF container to stdout.
+//!   Can be piped to ffplay for real-time playback:
 //!   `moqt-sub --pipe | ffplay -f ivf -`
 //!
-//! ## 処理フロー
-//! 1. リレーに QUIC 接続し、SETUP を交換
-//! 2. SUBSCRIBE を送信して SUBSCRIBE_OK を受信
-//! 3. uni ストリームでデータを受信
-//! 4. PUBLISH_DONE を受信したら終了
+//! ## Processing Flow
+//! 1. Establish a QUIC connection to the relay and exchange SETUP
+//! 2. Send SUBSCRIBE and receive SUBSCRIBE_OK
+//! 3. Receive data on unidirectional streams
+//! 4. Terminate upon receiving PUBLISH_DONE
 
 use std::io::Write;
 use std::net::SocketAddr;

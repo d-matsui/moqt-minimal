@@ -1,35 +1,35 @@
-//! # relay: MOQT リレーサーバーの実装
+//! # relay: MOQT relay server implementation
 //!
-//! このモジュールが MOQT リレーの中核ロジックを実装する。
+//! This module implements the core logic of the MOQT relay.
 //!
-//! ## アーキテクチャ概要
+//! ## Architecture overview
 //!
 //! ```text
-//! パブリッシャー ──QUIC接続──→ [リレーサーバー] ←──QUIC接続── サブスクライバー
+//! Publisher ──QUIC conn──→ [Relay Server] ←──QUIC conn── Subscriber
 //!   │                              │                              │
-//!   ├─ SETUP 交換                  │                  SETUP 交換 ─┤
-//!   ├─ PUBLISH_NAMESPACE 登録      │                              │
-//!   │                              ├─ SUBSCRIBE 転送 ────────────→│
+//!   ├─ SETUP exchange              │                SETUP exchange─┤
+//!   ├─ PUBLISH_NAMESPACE register  │                              │
+//!   │                              ├─ SUBSCRIBE forward ─────────→│
 //!   │                 SUBSCRIBE_OK ←┤                              │
-//!   ├─ データストリーム(uni) ─────→├─ データストリーム中継 ──────→│
-//!   └─ PUBLISH_DONE ──────────────→├─ PUBLISH_DONE 転送 ────────→│
+//!   ├─ Data stream (uni) ────────→├─ Data stream relay ──────────→│
+//!   └─ PUBLISH_DONE ─────────────→├─ PUBLISH_DONE forward ──────→│
 //! ```
 //!
-//! ## 接続ごとの処理フロー
-//! 1. 新しい QUIC 接続を受け入れ、セッション ID を割り当てる
-//! 2. SETUP メッセージを交換する
-//! 3. 双方向ストリーム（bidi）で制御メッセージを処理:
-//!    - PUBLISH_NAMESPACE: 名前空間を登録し REQUEST_OK を返す
-//!    - SUBSCRIBE: パブリッシャーに転送し、応答をサブスクライバーに返す
-//! 4. 単方向ストリーム（uni）でデータを中継:
-//!    - SubgroupHeader の Track Alias から購読を特定
-//!    - オブジェクトを1つずつ読みながらサブスクライバーに転送
+//! ## Per-connection processing flow
+//! 1. Accept a new QUIC connection and assign a session ID
+//! 2. Exchange SETUP messages
+//! 3. Process control messages on bidi streams:
+//!    - PUBLISH_NAMESPACE: register namespace and respond with REQUEST_OK
+//!    - SUBSCRIBE: forward to publisher and relay response back to subscriber
+//! 4. Relay data on uni streams:
+//!    - Identify the subscription from the Track Alias in SubgroupHeader
+//!    - Read objects one by one and forward them to subscribers
 //!
-//! ## 共有状態（RelayState）
-//! 全セッション間で共有される状態を `Arc<Mutex<RelayState>>` で管理する。
-//! - `sessions`: 接続中のセッション一覧
-//! - `namespace_publishers`: 名前空間→パブリッシャーのマッピング
-//! - `subscriptions`: アクティブな購読一覧
+//! ## Shared state (RelayState)
+//! State shared across all sessions is managed via `Arc<Mutex<RelayState>>`.
+//! - `sessions`: list of active sessions
+//! - `namespace_publishers`: namespace-to-publisher mapping
+//! - `subscriptions`: list of active subscriptions
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,50 +53,50 @@ use moqt_core::session::request_stream::{
     RequestMessage, RequestStreamReader, RequestStreamWriter,
 };
 
-/// セッションの一意な識別子。接続ごとに連番で割り当てる。
+/// Unique identifier for a session. Assigned sequentially per connection.
 type SessionId = u64;
 
-/// MOQT リレーサーバー。QUIC エンドポイントを持ち、接続を受け付ける。
+/// MOQT relay server. Holds a QUIC endpoint and accepts connections.
 pub struct Relay {
     endpoint: Endpoint,
-    /// 全セッション間で共有される状態。Mutex で排他制御する。
+    /// State shared across all sessions. Protected by a Mutex.
     state: Arc<Mutex<RelayState>>,
 }
 
-/// リレーの共有状態。セッション管理、名前空間登録、購読管理を行う。
+/// Shared relay state. Manages sessions, namespace registrations, and subscriptions.
 struct RelayState {
-    /// 次に割り当てるセッション ID
+    /// Next session ID to assign
     next_session_id: u64,
-    /// アクティブなセッションの一覧
+    /// List of active sessions
     sessions: HashMap<SessionId, SessionState>,
-    /// 名前空間→パブリッシャーセッション ID のマッピング。
-    /// サブスクライバーの SUBSCRIBE を適切なパブリッシャーに転送するために使う。
+    /// Namespace-to-publisher session ID mapping.
+    /// Used to forward subscriber SUBSCRIBE messages to the appropriate publisher.
     namespace_publishers: HashMap<TrackNamespace, SessionId>,
-    /// アクティブな購読一覧。データストリームの中継先の特定に使う。
+    /// List of active subscriptions. Used to identify relay destinations for data streams.
     subscriptions: Vec<SubscriptionEntry>,
-    /// サーバー側のリクエスト ID アロケータ（奇数 ID を生成）。
-    /// パブリッシャーへの SUBSCRIBE 転送時に新しい ID を割り当てる。
+    /// Server-side request ID allocator (generates odd IDs).
+    /// Assigns new IDs when forwarding SUBSCRIBE to publishers.
     request_id_alloc: RequestIdAllocator,
 }
 
-/// 個々のセッションの状態。QUIC 接続への参照を保持する。
+/// Per-session state. Holds a reference to the QUIC connection.
 struct SessionState {
     connection: Connection,
 }
 
-/// 購読エントリ。サブスクライバーとパブリッシャーの対応関係を記録する。
+/// Subscription entry. Records the mapping between a subscriber and a publisher.
 struct SubscriptionEntry {
-    /// 購読を要求したサブスクライバーのセッション ID
+    /// Session ID of the subscriber that requested the subscription
     subscriber_session: SessionId,
-    /// データを配信するパブリッシャーのセッション ID
+    /// Session ID of the publisher delivering data
     publisher_session: SessionId,
-    /// 購読対象のトラック名前空間
+    /// Track namespace of the subscription
     track_namespace: TrackNamespace,
-    /// 購読対象のトラック名
+    /// Track name of the subscription
     track_name: Vec<u8>,
-    /// パブリッシャーが割り当てたトラックエイリアス。
-    /// データストリームの SubgroupHeader に含まれるので、
-    /// この値でどの購読に対するデータかを特定する。
+    /// Track alias assigned by the publisher.
+    /// Included in the SubgroupHeader of data streams,
+    /// so this value identifies which subscription the data belongs to.
     publisher_track_alias: u64,
     #[allow(dead_code)]
     subscriber_track_alias: u64,
@@ -119,8 +119,8 @@ impl Relay {
         }
     }
 
-    /// リレーサーバーのメインループ。
-    /// 新しい QUIC 接続を受け付け、各接続を非同期タスクで処理する。
+    /// Main loop of the relay server.
+    /// Accepts new QUIC connections and processes each in an async task.
     pub async fn run(&self) -> Result<()> {
         while let Some(incoming) = self.endpoint.accept().await {
             let state = self.state.clone();
@@ -134,12 +134,12 @@ impl Relay {
     }
 }
 
-/// 1つの QUIC 接続（セッション）を処理する。
-/// SETUP 交換後、bidi ストリームと uni ストリームを並行して処理する。
+/// Process a single QUIC connection (session).
+/// After the SETUP exchange, process bidi and uni streams concurrently.
 async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayState>>) -> Result<()> {
     let connection = incoming.await?;
 
-    // セッション ID を割り当て、セッション一覧に登録
+    // Assign a session ID and register in the session list
     let session_id = {
         let mut s = state.lock().await;
         let id = s.next_session_id;
@@ -162,15 +162,15 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     };
     ctrl_writer.write_setup(&server_setup).await?;
 
-    // クライアントからサーバーへ: SETUP を受信
+    // Client -> Server: receive SETUP
     let peer_ctrl_recv = connection.accept_uni().await?;
     let mut ctrl_reader = ControlStreamReader::new(peer_ctrl_recv);
     let _peer_setup = ctrl_reader.read_setup().await?;
 
-    // === メインループ: bidi ストリームと uni ストリームを並行処理 ===
-    // tokio::select! で両方を同時に待ち受け、先に到着した方を処理する。
-    // bidi: 制御メッセージ（PUBLISH_NAMESPACE, SUBSCRIBE）
-    // uni: データストリーム（SubgroupHeader + Objects）
+    // === Main loop: process bidi and uni streams concurrently ===
+    // Use tokio::select! to await both simultaneously and process whichever arrives first.
+    // bidi: control messages (PUBLISH_NAMESPACE, SUBSCRIBE)
+    // uni: data streams (SubgroupHeader + Objects)
     loop {
         tokio::select! {
             bidi = connection.accept_bi() => {
@@ -208,10 +208,10 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
         }
     }
 
-    // === 切断時のクリーンアップ ===
-    // このセッションに関連する全ての状態を削除する。
-    // 名前空間登録と購読エントリを除去しないと、
-    // 切断済みセッションへの転送が試みられてしまう。
+    // === Cleanup on disconnect ===
+    // Remove all state associated with this session.
+    // Without removing namespace registrations and subscription entries,
+    // the relay would attempt to forward to disconnected sessions.
     {
         let mut s = state.lock().await;
         s.sessions.remove(&session_id);
@@ -224,15 +224,15 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     Ok(())
 }
 
-/// パブリッシャーからの単方向データストリームを処理し、サブスクライバーに中継する。
+/// Process a unidirectional data stream from a publisher and relay it to subscribers.
 ///
-/// ## 中継の流れ
-/// 1. SubgroupHeader を読み取り、Track Alias から対象の購読を特定
-/// 2. 全サブスクライバーに対して新しい uni ストリームを開く
-/// 3. SubgroupHeader をサブスクライバーに転送
-/// 4. オブジェクトを1つずつ読みながら即座にサブスクライバーに転送
-///    （ストリーム全体をバッファリングせず、低遅延で中継する）
-/// 5. ストリーム終了（FIN）をサブスクライバーに伝搬
+/// ## Relay flow
+/// 1. Read the SubgroupHeader and identify the target subscription from the Track Alias
+/// 2. Open new uni streams to all subscribers
+/// 3. Forward the SubgroupHeader to subscribers
+/// 4. Read objects one by one and immediately forward them to subscribers
+///    (relay with low latency without buffering the entire stream)
+/// 5. Propagate stream termination (FIN) to subscribers
 async fn handle_data_stream(
     sender_session: SessionId,
     recv: quinn::RecvStream,
@@ -240,13 +240,13 @@ async fn handle_data_stream(
 ) -> Result<()> {
     let mut data_reader = DataStreamReader::new(recv);
 
-    // === SubgroupHeader の読み取りと検証 ===
+    // === Read and validate SubgroupHeader ===
     let (header, header_bytes) = data_reader.read_subgroup_header().await?;
     let track_alias = header.track_alias;
 
-    // === サブスクライバーの特定と下流ストリームの開設 ===
-    // Track Alias と送信元セッションから対象の購読を見つけ、
-    // 各サブスクライバーへの uni ストリームを開く
+    // === Identify subscribers and open downstream streams ===
+    // Find matching subscriptions by Track Alias and sender session,
+    // then open uni streams to each subscriber
     let subscriber_writers: Vec<DataStreamWriter> = {
         let s = state.lock().await;
         let sub_conns: Vec<Connection> = s
@@ -261,7 +261,7 @@ async fn handle_data_stream(
                     .map(|sess| sess.connection.clone())
             })
             .collect();
-        // ロックを解放してからストリームを開く（await を含むため）
+        // Release the lock before opening streams (since it involves await)
         drop(s);
 
         let mut writers = Vec::new();
@@ -274,14 +274,14 @@ async fn handle_data_stream(
         writers
     };
 
-    // サブスクライバーがいなければ、ストリームを読み捨てる
+    // If there are no subscribers, drain the stream
     if subscriber_writers.is_empty() {
         while let Ok(Some(_)) = data_reader.read_object().await {}
         return Ok(());
     }
 
-    // === SubgroupHeader の転送 ===
-    // 読み取った生バイト列をそのままサブスクライバーに書き込む
+    // === Forward SubgroupHeader ===
+    // Write the raw bytes as-is to subscribers
     let subscriber_writers: Vec<Arc<Mutex<DataStreamWriter>>> = subscriber_writers
         .into_iter()
         .map(|w| Arc::new(Mutex::new(w)))
@@ -291,12 +291,12 @@ async fn handle_data_stream(
         writer.lock().await.write_raw(&header_bytes).await?;
     }
 
-    // === オブジェクトの逐次中継 ===
-    // オブジェクトを1つずつ読み、即座に全サブスクライバーに転送する。
-    // バッファリングしないため、大きなストリームでもメモリ使用量が抑えられる。
+    // === Relay objects incrementally ===
+    // Read objects one by one and immediately forward to all subscribers.
+    // No buffering, so memory usage stays low even for large streams.
     while let Some((_obj, payload, obj_header_bytes)) = data_reader.read_object().await? {
-        // 全サブスクライバーに即座に転送
-        // エラーが発生しても他のサブスクライバーへの転送は継続する
+        // Forward immediately to all subscribers
+        // Continue forwarding to other subscribers even if an error occurs
         for writer in &subscriber_writers {
             let mut w = writer.lock().await;
             let _ = w.write_raw(&obj_header_bytes).await;
@@ -304,9 +304,9 @@ async fn handle_data_stream(
         }
     }
 
-    // === ストリーム終了の伝搬 ===
-    // パブリッシャーのストリームが終了したら、
-    // サブスクライバーのストリームも finish() で FIN を送る
+    // === Propagate stream termination ===
+    // When the publisher's stream ends,
+    // send FIN to subscriber streams via finish()
     for writer in subscriber_writers {
         let mut w = writer.lock().await;
         let _ = w.finish();
