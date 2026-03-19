@@ -32,12 +32,13 @@ use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::setup::{SetupMessage, SetupOption};
-use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
-use moqt_core::session::request_stream::RequestStreamReader;
+use moqt_core::session::request_stream::{
+    RequestMessage, RequestStreamReader, RequestStreamWriter,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -87,52 +88,49 @@ async fn main() -> anyhow::Result<()> {
     };
     ctrl_writer.write_setup(&setup).await?;
 
-    let mut buf = Vec::new();
     let recv = connection.accept_uni().await?;
     let mut reader = ControlStreamReader::new(recv);
     let _relay_setup = reader.read_setup().await?;
     eprintln!("SETUP exchange complete.");
 
-    // === PUBLISH_NAMESPACE: 配信名前空間の登録 ===
+    // === PUBLISH_NAMESPACE ===
     let ns = TrackNamespace {
         fields: vec![namespace.as_bytes().to_vec()],
     };
-    let (mut ns_send, ns_recv) = connection.open_bi().await?;
+    let (ns_send, ns_recv) = connection.open_bi().await?;
+    let mut ns_writer = RequestStreamWriter::new(ns_send);
+    let mut ns_reader = RequestStreamReader::new(ns_recv);
     let pub_ns = PublishNamespaceMessage {
         request_id: 0,
         required_request_id_delta: 0,
         track_namespace: ns.clone(),
     };
-    buf.clear();
-    pub_ns.encode(&mut buf)?;
-    ns_send.write_all(&buf).await?;
-
-    let mut ns_reader = RequestStreamReader::new(ns_recv);
-    let _ok = ns_reader.read_message_bytes().await?;
+    ns_writer.write_publish_namespace(&pub_ns).await?;
+    let _ok = ns_reader.read_message().await?;
     eprintln!("PUBLISH_NAMESPACE registered.");
 
-    // === SUBSCRIBE の待ち受け ===
-    // サブスクライバーがリレー経由で購読を要求してくるのを待つ
+    // === Wait for SUBSCRIBE ===
     eprintln!("Waiting for SUBSCRIBE...");
-    let (mut sub_send, sub_recv) = connection.accept_bi().await?;
+    let (sub_send, sub_recv) = connection.accept_bi().await?;
+    let mut sub_writer = RequestStreamWriter::new(sub_send);
     let mut sub_reader = RequestStreamReader::new(sub_recv);
-    let sub_bytes = sub_reader.read_message_bytes().await?;
-    let mut slice = sub_bytes.as_slice();
-    let subscribe = SubscribeMessage::decode(&mut slice)?;
+    let sub_msg = sub_reader.read_message().await?;
+    let subscribe = match sub_msg {
+        RequestMessage::Subscribe(s) => s,
+        _ => anyhow::bail!("expected SUBSCRIBE"),
+    };
     eprintln!(
         "Received SUBSCRIBE for track: {:?}",
         String::from_utf8_lossy(&subscribe.track_name)
     );
 
-    // SUBSCRIBE_OK を返す（Track Alias = 1 を割り当て）
+    // Send SUBSCRIBE_OK (Track Alias = 1)
     let ok = SubscribeOkMessage {
         track_alias: 1,
         parameters: vec![],
         track_properties_raw: vec![],
     };
-    buf.clear();
-    ok.encode(&mut buf)?;
-    sub_send.write_all(&buf).await?;
+    sub_writer.write_subscribe_ok(&ok).await?;
     eprintln!("Sent SUBSCRIBE_OK (alias=1).");
 
     if pipe_mode {
@@ -140,15 +138,13 @@ async fn main() -> anyhow::Result<()> {
         let conn = connection.clone();
         let stream_count = send_from_stdin(conn, track_name).await?;
 
-        // 配信終了を通知
+        // Send PUBLISH_DONE
         let done = PublishDoneMessage {
             status_code: 0x2, // TRACK_ENDED
             stream_count,
             reason_phrase: ReasonPhrase { value: vec![] },
         };
-        buf.clear();
-        done.encode(&mut buf);
-        sub_send.write_all(&buf).await?;
+        sub_writer.write_publish_done(&done).await?;
         // データがフラッシュされるのを待ってから接続を閉じる
         tokio::time::sleep(Duration::from_secs(1)).await;
         eprintln!("Sent PUBLISH_DONE ({stream_count} streams). Exiting.");
@@ -190,9 +186,7 @@ async fn main() -> anyhow::Result<()> {
             stream_count: 5,
             reason_phrase: ReasonPhrase { value: vec![] },
         };
-        buf.clear();
-        done.encode(&mut buf);
-        sub_send.write_all(&buf).await?;
+        sub_writer.write_publish_done(&done).await?;
         eprintln!("Sent PUBLISH_DONE. Exiting.");
     }
 

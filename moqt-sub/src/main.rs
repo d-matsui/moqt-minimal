@@ -20,13 +20,13 @@ use std::net::SocketAddr;
 use moqt_core::data::object::{ObjectHeader, resolve_object_id};
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
-use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
-use moqt_core::session::request_stream::RequestStreamReader;
+use moqt_core::session::request_stream::{
+    RequestMessage, RequestStreamReader, RequestStreamWriter,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -78,7 +78,6 @@ async fn main() -> anyhow::Result<()> {
     };
     ctrl_writer.write_setup(&setup).await?;
 
-    let mut buf = Vec::new();
     let recv = connection.accept_uni().await?;
     let mut reader = ControlStreamReader::new(recv);
     let _relay_setup = reader.read_setup().await?;
@@ -87,7 +86,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // SUBSCRIBE
-    let (mut sub_send, sub_recv) = connection.open_bi().await?;
+    let (sub_send, sub_recv) = connection.open_bi().await?;
+    let mut sub_writer = RequestStreamWriter::new(sub_send);
+    let mut sub_reader = RequestStreamReader::new(sub_recv);
     let subscribe = SubscribeMessage {
         request_id: 0,
         required_request_id_delta: 0,
@@ -99,18 +100,17 @@ async fn main() -> anyhow::Result<()> {
             SubscriptionFilter::NextGroupStart,
         )],
     };
-    buf.clear();
-    subscribe.encode(&mut buf)?;
-    sub_send.write_all(&buf).await?;
+    sub_writer.write_subscribe(&subscribe).await?;
     if !pipe_mode {
         eprintln!("Sent SUBSCRIBE.");
     }
 
     // Read SUBSCRIBE_OK
-    let mut sub_reader = RequestStreamReader::new(sub_recv);
-    let ok_bytes = sub_reader.read_message_bytes().await?;
-    let mut slice = ok_bytes.as_slice();
-    let subscribe_ok = SubscribeOkMessage::decode(&mut slice)?;
+    let sub_msg = sub_reader.read_message().await?;
+    let subscribe_ok = match sub_msg {
+        RequestMessage::SubscribeOk(ok) => ok,
+        _ => anyhow::bail!("expected SUBSCRIBE_OK"),
+    };
     if !pipe_mode {
         eprintln!(
             "Received SUBSCRIBE_OK (alias={}).",
@@ -216,9 +216,11 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Wait for PUBLISH_DONE
-    let done_bytes = sub_reader.read_message_bytes().await?;
-    let mut done_slice = done_bytes.as_slice();
-    let publish_done = PublishDoneMessage::decode(&mut done_slice)?;
+    let done_msg = sub_reader.read_message().await?;
+    let publish_done = match done_msg {
+        RequestMessage::PublishDone(done) => done,
+        _ => anyhow::bail!("expected PUBLISH_DONE"),
+    };
     if !pipe_mode {
         eprintln!(
             "Received PUBLISH_DONE (status={}, streams={}).",

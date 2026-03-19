@@ -40,21 +40,18 @@ use quinn::{Connection, Endpoint};
 use tokio::sync::Mutex;
 
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::publish_done::PublishDoneMessage;
-use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::request_error::RequestErrorMessage;
 use moqt_core::message::request_ok::RequestOkMessage;
 use moqt_core::message::setup::SetupMessage;
 use moqt_core::message::subscribe::SubscribeMessage;
-use moqt_core::message::subscribe_ok::SubscribeOkMessage;
-use moqt_core::message::{MSG_PUBLISH_NAMESPACE, MSG_SUBSCRIBE};
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::primitives::varint::decode_varint;
 use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
 use moqt_core::session::request_id::RequestIdAllocator;
-use moqt_core::session::request_stream::RequestStreamReader;
+use moqt_core::session::request_stream::{
+    RequestMessage, RequestStreamReader, RequestStreamWriter,
+};
 
 /// セッションの一意な識別子。接続ごとに連番で割り当てる。
 type SessionId = u64;
@@ -103,9 +100,9 @@ struct SubscriptionEntry {
     publisher_track_alias: u64,
     #[allow(dead_code)]
     subscriber_track_alias: u64,
-    /// サブスクライバーへの bidi ストリーム送信側。
-    /// PUBLISH_DONE の転送に使う。
-    subscriber_bidi_send: Arc<Mutex<quinn::SendStream>>,
+    /// Write side of the subscriber's bidi stream.
+    /// Used to forward PUBLISH_DONE.
+    subscriber_bidi_send: Arc<Mutex<RequestStreamWriter>>,
 }
 
 impl Relay {
@@ -318,75 +315,60 @@ async fn handle_incoming_uni(
     Ok(())
 }
 
-/// 双方向ストリーム上の制御メッセージを処理する。
-/// メッセージタイプを読み取り、PUBLISH_NAMESPACE か SUBSCRIBE に分岐する。
+/// Handle a request (bidi) stream.
+/// Read the first message and dispatch to the appropriate handler.
 async fn handle_bidi_stream(
     session_id: SessionId,
-    mut send: quinn::SendStream,
+    send: quinn::SendStream,
     recv: quinn::RecvStream,
     state: Arc<Mutex<RelayState>>,
     connection: Connection,
 ) -> Result<()> {
     let mut reader = RequestStreamReader::new(recv);
-    let msg_bytes = reader.read_message_bytes().await?;
+    let mut writer = RequestStreamWriter::new(send);
+    let msg = reader.read_message().await?;
 
-    // メッセージタイプを先読みして分岐を決定
-    let mut slice = msg_bytes.as_slice();
-    let msg_type = decode_varint(&mut slice)?;
-
-    // デコード用にスライスをリセット（先頭から再度デコードするため）
-    let mut slice = msg_bytes.as_slice();
-
-    match msg_type {
-        MSG_PUBLISH_NAMESPACE => {
-            // パブリッシャーが名前空間を登録
-            let msg = PublishNamespaceMessage::decode(&mut slice)?;
+    match msg {
+        RequestMessage::PublishNamespace(pub_ns) => {
             {
                 let mut s = state.lock().await;
                 s.namespace_publishers
-                    .insert(msg.track_namespace.clone(), session_id);
+                    .insert(pub_ns.track_namespace.clone(), session_id);
             }
-            // 登録成功を応答
             let ok = RequestOkMessage {};
-            let mut buf = Vec::new();
-            ok.encode(&mut buf);
-            send.write_all(&buf).await?;
+            writer.write_request_ok(&ok).await?;
         }
-        MSG_SUBSCRIBE => {
-            // サブスクライバーがトラックを購読
-            let msg = SubscribeMessage::decode(&mut slice)?;
-            handle_subscribe(session_id, msg, send, state, connection).await?;
+        RequestMessage::Subscribe(subscribe) => {
+            handle_subscribe(session_id, subscribe, writer, state, connection).await?;
         }
         _ => {
-            bail!("unexpected message type on bidi stream: 0x{msg_type:X}");
+            bail!("unexpected message on request stream");
         }
     }
 
     Ok(())
 }
 
-/// SUBSCRIBE メッセージを処理する。
+/// Handle a SUBSCRIBE message.
 ///
-/// ## 処理フロー
-/// 1. 名前空間からパブリッシャーを検索（前方一致で検索）
-/// 2. パブリッシャーが見つからなければ REQUEST_ERROR を返す
-/// 3. パブリッシャーに SUBSCRIBE を転送（新しいリクエスト ID を割り当て）
-/// 4. パブリッシャーから SUBSCRIBE_OK を受信
-/// 5. 購読エントリを記録（データストリームの中継に使用）
-/// 6. サブスクライバーに SUBSCRIBE_OK を転送
-/// 7. パブリッシャーから PUBLISH_DONE を待ち、サブスクライバーに転送
+/// 1. Check subscription filter (only NextGroupStart supported)
+/// 2. Find publisher by namespace (prefix match)
+/// 3. Forward SUBSCRIBE to publisher (with relay-assigned request ID)
+/// 4. Receive SUBSCRIBE_OK from publisher
+/// 5. Record subscription entry (used for data stream relay)
+/// 6. Forward SUBSCRIBE_OK to subscriber
+/// 7. Wait for PUBLISH_DONE from publisher and forward to subscriber
 async fn handle_subscribe(
     subscriber_session: SessionId,
     msg: SubscribeMessage,
-    subscriber_send: quinn::SendStream,
+    subscriber_writer: RequestStreamWriter,
     state: Arc<Mutex<RelayState>>,
     _subscriber_conn: Connection,
 ) -> Result<()> {
-    let subscriber_send = Arc::new(Mutex::new(subscriber_send));
+    let subscriber_writer = Arc::new(Mutex::new(subscriber_writer));
 
-    // === フィルタのチェック ===
+    // === Filter check ===
     // This minimal implementation only supports NextGroupStart.
-    // Reject other filter types with REQUEST_ERROR (NOT_SUPPORTED).
     let has_unsupported_filter = msg.parameters.iter().any(|p| {
         matches!(
             p,
@@ -402,16 +384,16 @@ async fn handle_subscribe(
                 value: b"only NextGroupStart filter is supported".to_vec(),
             },
         };
-        let mut buf = Vec::new();
-        err.encode(&mut buf);
-        subscriber_send.lock().await.write_all(&buf).await?;
+        subscriber_writer
+            .lock()
+            .await
+            .write_request_error(&err)
+            .await?;
         return Ok(());
     }
 
-    // === パブリッシャーの検索 ===
-    // 登録された名前空間の中から、SUBSCRIBE の名前空間に前方一致するものを探す。
-    // 例: パブリッシャーが ["example"] を登録し、サブスクライバーが ["example", "live"] を
-    // 購読した場合、["example"] が ["example", "live"] の前方一致となるのでマッチする。
+    // === Find publisher ===
+    // Prefix-match: registered ["example"] matches subscribe ["example", "live"].
     let (publisher_session_id, publisher_conn) = {
         let s = state.lock().await;
         let ns = &msg.track_namespace;
@@ -419,8 +401,6 @@ async fn handle_subscribe(
             .namespace_publishers
             .iter()
             .find_map(|(registered_ns, sid)| {
-                // 登録名前空間のフィールド数が購読名前空間以下で、
-                // 先頭のフィールドが全て一致すれば前方一致とみなす
                 if registered_ns.fields.len() <= ns.fields.len()
                     && registered_ns
                         .fields
@@ -444,7 +424,6 @@ async fn handle_subscribe(
                 (id, conn)
             }
             None => {
-                // パブリッシャーが見つからない → エラー応答
                 let err = RequestErrorMessage {
                     error_code: 0x10, // DOES_NOT_EXIST
                     retry_interval: 0,
@@ -452,19 +431,21 @@ async fn handle_subscribe(
                         value: b"no publisher for namespace".to_vec(),
                     },
                 };
-                let mut buf = Vec::new();
-                err.encode(&mut buf);
-                subscriber_send.lock().await.write_all(&buf).await?;
+                subscriber_writer
+                    .lock()
+                    .await
+                    .write_request_error(&err)
+                    .await?;
                 return Ok(());
             }
         }
     };
 
-    // === SUBSCRIBE をパブリッシャーに転送 ===
-    // リレー独自のリクエスト ID を割り当てて転送する。
-    // サブスクライバーの ID をそのまま使わないのは、
-    // リレーが複数のサブスクライバーからの SUBSCRIBE を管理するため。
-    let (mut pub_send, pub_recv) = publisher_conn.open_bi().await?;
+    // === Forward SUBSCRIBE to publisher ===
+    // Assign a relay-owned request ID so the relay can manage multiple subscribers.
+    let (pub_send, pub_recv) = publisher_conn.open_bi().await?;
+    let mut pub_writer = RequestStreamWriter::new(pub_send);
+    let mut pub_reader = RequestStreamReader::new(pub_recv);
 
     let relay_request_id = {
         let mut s = state.lock().await;
@@ -477,21 +458,18 @@ async fn handle_subscribe(
         track_name: msg.track_name.clone(),
         parameters: msg.parameters.clone(),
     };
-    let mut buf = Vec::new();
-    upstream_subscribe.encode(&mut buf)?;
-    pub_send.write_all(&buf).await?;
+    pub_writer.write_subscribe(&upstream_subscribe).await?;
 
-    // === SUBSCRIBE_OK の受信と転送 ===
-    let mut pub_reader = RequestStreamReader::new(pub_recv);
-    let ok_bytes = pub_reader.read_message_bytes().await?;
-    let mut ok_slice = ok_bytes.as_slice();
-    let subscribe_ok = SubscribeOkMessage::decode(&mut ok_slice)?;
+    // === Receive and forward SUBSCRIBE_OK ===
+    let pub_msg = pub_reader.read_message().await?;
+    let subscribe_ok = match pub_msg {
+        RequestMessage::SubscribeOk(ok) => ok,
+        _ => bail!("expected SUBSCRIBE_OK from publisher"),
+    };
 
     let track_alias = subscribe_ok.track_alias;
 
-    // === 購読エントリの記録 ===
-    // この情報は、データストリーム中継時にパブリッシャーの Track Alias から
-    // サブスクライバーを特定するために使われる。
+    // === Record subscription entry ===
     {
         let mut s = state.lock().await;
         s.subscriptions.push(SubscriptionEntry {
@@ -501,24 +479,25 @@ async fn handle_subscribe(
             track_name: msg.track_name.clone(),
             publisher_track_alias: track_alias,
             subscriber_track_alias: track_alias,
-            subscriber_bidi_send: subscriber_send.clone(),
+            subscriber_bidi_send: subscriber_writer.clone(),
         });
     }
 
-    // サブスクライバーに SUBSCRIBE_OK を転送
-    let mut ok_buf = Vec::new();
-    subscribe_ok.encode(&mut ok_buf)?;
-    subscriber_send.lock().await.write_all(&ok_buf).await?;
+    // Forward SUBSCRIBE_OK to subscriber
+    subscriber_writer
+        .lock()
+        .await
+        .write_subscribe_ok(&subscribe_ok)
+        .await?;
 
-    // === PUBLISH_DONE の待機と転送 ===
-    // パブリッシャーが配信を終了するまでこのタスクは生き続ける。
-    // PUBLISH_DONE を受信したら、同じトラックを購読している
-    // 全サブスクライバーに転送する。
-    let done_bytes = pub_reader.read_message_bytes().await?;
-    let mut done_slice = done_bytes.as_slice();
-    let _publish_done = PublishDoneMessage::decode(&mut done_slice)?;
+    // === Wait for PUBLISH_DONE and forward ===
+    let pub_msg = pub_reader.read_message().await?;
+    let publish_done = match pub_msg {
+        RequestMessage::PublishDone(done) => done,
+        _ => bail!("expected PUBLISH_DONE from publisher"),
+    };
 
-    let subs_to_notify: Vec<Arc<Mutex<quinn::SendStream>>> = {
+    let subs_to_notify: Vec<Arc<Mutex<RequestStreamWriter>>> = {
         let s = state.lock().await;
         s.subscriptions
             .iter()
@@ -531,8 +510,8 @@ async fn handle_subscribe(
             .collect()
     };
 
-    for send in subs_to_notify {
-        let _ = send.lock().await.write_all(&done_bytes).await;
+    for writer in subs_to_notify {
+        let _ = writer.lock().await.write_publish_done(&publish_done).await;
     }
 
     Ok(())
