@@ -24,6 +24,7 @@ use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::ControlStreamReader;
 use moqt_core::session::quic_config;
+use moqt_core::session::request_stream::RequestStreamReader;
 
 /// Helper: generate self-signed cert and return (cert_der, key_der)
 fn gen_cert() -> (
@@ -100,7 +101,7 @@ async fn publish_namespace(conn: &quinn::Connection, namespace: TrackNamespace) 
     msg.encode(&mut buf).unwrap();
     send.write_all(&buf).await.unwrap();
 
-    let mut reader = ControlStreamReader::new(recv);
+    let mut reader = RequestStreamReader::new(recv);
     let ok_bytes = reader.read_message_bytes().await.unwrap();
     let mut slice = ok_bytes.as_slice();
     let _ok = RequestOkMessage::decode(&mut slice).unwrap();
@@ -195,7 +196,7 @@ async fn subscribe_via_relay() {
     let pub_conn2 = pub_conn.clone();
     tokio::spawn(async move {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader = ControlStreamReader::new(recv);
+        let mut reader = RequestStreamReader::new(recv);
         let sub_bytes = reader.read_message_bytes().await.unwrap();
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
@@ -229,7 +230,7 @@ async fn subscribe_via_relay() {
     sub_send.write_all(&buf).await.unwrap();
 
     // Read SUBSCRIBE_OK
-    let mut reader = ControlStreamReader::new(sub_recv);
+    let mut reader = RequestStreamReader::new(sub_recv);
     let ok_bytes = reader.read_message_bytes().await.unwrap();
     let mut slice = ok_bytes.as_slice();
     let subscribe_ok = SubscribeOkMessage::decode(&mut slice).unwrap();
@@ -262,7 +263,7 @@ async fn object_forwarding() {
     let pub_conn2 = pub_conn.clone();
     let pub_handle = tokio::spawn(async move {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader = ControlStreamReader::new(recv);
+        let mut reader = RequestStreamReader::new(recv);
         let sub_bytes = reader.read_message_bytes().await.unwrap();
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
@@ -324,7 +325,7 @@ async fn object_forwarding() {
     sub_send.write_all(&buf).await.unwrap();
 
     // Read SUBSCRIBE_OK
-    let mut reader = ControlStreamReader::new(sub_recv);
+    let mut reader = RequestStreamReader::new(sub_recv);
     let ok_bytes = reader.read_message_bytes().await.unwrap();
     let mut slice = ok_bytes.as_slice();
     let _subscribe_ok = SubscribeOkMessage::decode(&mut slice).unwrap();
@@ -391,7 +392,7 @@ async fn publish_done_forwarding() {
     let pub_conn2 = pub_conn.clone();
     tokio::spawn(async move {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader = ControlStreamReader::new(recv);
+        let mut reader = RequestStreamReader::new(recv);
         let sub_bytes = reader.read_message_bytes().await.unwrap();
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
@@ -454,7 +455,7 @@ async fn publish_done_forwarding() {
     sub_send.write_all(&buf).await.unwrap();
 
     // Read SUBSCRIBE_OK
-    let mut sub_reader = ControlStreamReader::new(sub_recv);
+    let mut sub_reader = RequestStreamReader::new(sub_recv);
     let ok_bytes = sub_reader.read_message_bytes().await.unwrap();
     let mut slice = ok_bytes.as_slice();
     let _subscribe_ok = SubscribeOkMessage::decode(&mut slice).unwrap();
@@ -490,7 +491,7 @@ async fn multiple_groups() {
     let pub_conn2 = pub_conn.clone();
     let pub_handle = tokio::spawn(async move {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader = ControlStreamReader::new(recv);
+        let mut reader = RequestStreamReader::new(recv);
         let sub_bytes = reader.read_message_bytes().await.unwrap();
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
@@ -557,7 +558,7 @@ async fn multiple_groups() {
     subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
-    let mut sub_reader = ControlStreamReader::new(sub_recv);
+    let mut sub_reader = RequestStreamReader::new(sub_recv);
     let ok_bytes = sub_reader.read_message_bytes().await.unwrap();
     let mut slice = ok_bytes.as_slice();
     let _subscribe_ok = SubscribeOkMessage::decode(&mut slice).unwrap();
@@ -640,7 +641,7 @@ async fn late_join() {
     let pub_conn2 = pub_conn.clone();
     let pub_handle = tokio::spawn(async move {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader = ControlStreamReader::new(recv);
+        let mut reader = RequestStreamReader::new(recv);
         let sub_bytes = reader.read_message_bytes().await.unwrap();
         let mut slice = sub_bytes.as_slice();
         let _subscribe = SubscribeMessage::decode(&mut slice).unwrap();
@@ -710,7 +711,7 @@ async fn late_join() {
     subscribe.encode(&mut buf).unwrap();
     sub_send.write_all(&buf).await.unwrap();
 
-    let mut sub_reader = ControlStreamReader::new(sub_recv);
+    let mut sub_reader = RequestStreamReader::new(sub_recv);
     let ok_bytes = sub_reader.read_message_bytes().await.unwrap();
     let mut slice = ok_bytes.as_slice();
     let _subscribe_ok = SubscribeOkMessage::decode(&mut slice).unwrap();
@@ -797,7 +798,7 @@ async fn subscribe_unknown_namespace() {
     sub_send.write_all(&buf).await.unwrap();
 
     // Should receive REQUEST_ERROR
-    let mut reader = ControlStreamReader::new(sub_recv);
+    let mut reader = RequestStreamReader::new(sub_recv);
     let err_bytes = reader.read_message_bytes().await.unwrap();
     let mut slice = err_bytes.as_slice();
     let err = RequestErrorMessage::decode(&mut slice).unwrap();
@@ -829,7 +830,7 @@ async fn multiple_subscribers() {
     let pub_handle = tokio::spawn(async move {
         // Accept first SUBSCRIBE
         let (mut send1, recv1) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader1 = ControlStreamReader::new(recv1);
+        let mut reader1 = RequestStreamReader::new(recv1);
         let sub_bytes1 = reader1.read_message_bytes().await.unwrap();
         let mut s1 = sub_bytes1.as_slice();
         let _sub1 = SubscribeMessage::decode(&mut s1).unwrap();
@@ -844,7 +845,7 @@ async fn multiple_subscribers() {
 
         // Accept second SUBSCRIBE
         let (mut send2, recv2) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader2 = ControlStreamReader::new(recv2);
+        let mut reader2 = RequestStreamReader::new(recv2);
         let sub_bytes2 = reader2.read_message_bytes().await.unwrap();
         let mut s2 = sub_bytes2.as_slice();
         let _sub2 = SubscribeMessage::decode(&mut s2).unwrap();
@@ -908,7 +909,7 @@ async fn multiple_subscribers() {
         subscribe.encode(&mut buf).unwrap();
         sub_send.write_all(&buf).await.unwrap();
 
-        let mut reader = ControlStreamReader::new(sub_recv);
+        let mut reader = RequestStreamReader::new(sub_recv);
         let _ok_bytes = reader.read_message_bytes().await.unwrap();
 
         // Wait for objects
@@ -969,7 +970,7 @@ async fn multiple_tracks() {
     let pub_handle = tokio::spawn(async move {
         // Accept SUBSCRIBE for video (alias=1)
         let (mut send_v, recv_v) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader_v = ControlStreamReader::new(recv_v);
+        let mut reader_v = RequestStreamReader::new(recv_v);
         let _ = reader_v.read_message_bytes().await.unwrap();
         let ok_v = SubscribeOkMessage {
             track_alias: 1,
@@ -982,7 +983,7 @@ async fn multiple_tracks() {
 
         // Accept SUBSCRIBE for audio (alias=2)
         let (mut send_a, recv_a) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader_a = ControlStreamReader::new(recv_a);
+        let mut reader_a = RequestStreamReader::new(recv_a);
         let _ = reader_a.read_message_bytes().await.unwrap();
         let ok_a = SubscribeOkMessage {
             track_alias: 2,
@@ -1066,7 +1067,7 @@ async fn multiple_tracks() {
     let mut buf = Vec::new();
     sub_v.encode(&mut buf).unwrap();
     sub_send_v.write_all(&buf).await.unwrap();
-    let mut reader_v = ControlStreamReader::new(sub_recv_v);
+    let mut reader_v = RequestStreamReader::new(sub_recv_v);
     let _ = reader_v.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
 
     // Subscribe to audio
@@ -1083,7 +1084,7 @@ async fn multiple_tracks() {
     buf.clear();
     sub_a.encode(&mut buf).unwrap();
     sub_send_a.write_all(&buf).await.unwrap();
-    let mut reader_a = ControlStreamReader::new(sub_recv_a);
+    let mut reader_a = RequestStreamReader::new(sub_recv_a);
     let _ = reader_a.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
 
     pub_handle.await.unwrap();
@@ -1136,7 +1137,7 @@ async fn subscriber_disconnect() {
     let pub_conn2 = pub_conn.clone();
     let pub_handle = tokio::spawn(async move {
         let (mut send, recv) = pub_conn2.accept_bi().await.unwrap();
-        let mut reader = ControlStreamReader::new(recv);
+        let mut reader = RequestStreamReader::new(recv);
         let _ = reader.read_message_bytes().await.unwrap();
         let ok = SubscribeOkMessage {
             track_alias: 1,
@@ -1195,7 +1196,7 @@ async fn subscriber_disconnect() {
         subscribe.encode(&mut buf).unwrap();
         sub_send.write_all(&buf).await.unwrap();
 
-        let mut reader = ControlStreamReader::new(sub_recv);
+        let mut reader = RequestStreamReader::new(sub_recv);
         let _ = reader.read_message_bytes().await.unwrap(); // SUBSCRIBE_OK
 
         // Receive at least 1 object

@@ -37,6 +37,7 @@ use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::ControlStreamReader;
+use moqt_core::session::request_stream::RequestStreamReader;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -106,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     pub_ns.encode(&mut buf)?;
     ns_send.write_all(&buf).await?;
 
-    let mut ns_reader = ControlStreamReader::new(ns_recv);
+    let mut ns_reader = RequestStreamReader::new(ns_recv);
     let _ok = ns_reader.read_message_bytes().await?;
     eprintln!("PUBLISH_NAMESPACE registered.");
 
@@ -114,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
     // サブスクライバーがリレー経由で購読を要求してくるのを待つ
     eprintln!("Waiting for SUBSCRIBE...");
     let (mut sub_send, sub_recv) = connection.accept_bi().await?;
-    let mut sub_reader = ControlStreamReader::new(sub_recv);
+    let mut sub_reader = RequestStreamReader::new(sub_recv);
     let sub_bytes = sub_reader.read_message_bytes().await?;
     let mut slice = sub_bytes.as_slice();
     let subscribe = SubscribeMessage::decode(&mut slice)?;

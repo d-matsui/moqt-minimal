@@ -25,6 +25,30 @@
 
 use anyhow::{Result, bail, ensure};
 
+/// Determine the total byte length of a varint from its first byte.
+/// Returns the number of bytes (including the first byte) needed to decode the varint.
+pub fn varint_byte_length(first_byte: u8) -> Result<usize> {
+    if first_byte & 0x80 == 0 {
+        Ok(1)
+    } else if first_byte & 0xc0 == 0x80 {
+        Ok(2)
+    } else if first_byte & 0xe0 == 0xc0 {
+        Ok(3)
+    } else if first_byte & 0xf0 == 0xe0 {
+        Ok(4)
+    } else if first_byte & 0xf8 == 0xf0 {
+        Ok(5)
+    } else if first_byte & 0xfc == 0xf8 {
+        Ok(6)
+    } else if first_byte == 0xfc {
+        bail!("invalid varint code point 0xFC")
+    } else if first_byte == 0xfe {
+        Ok(8)
+    } else {
+        Ok(9)
+    }
+}
+
 /// Encode a u64 value as a MOQT variable-length integer and append it to the buffer.
 /// Always uses the minimum number of bytes (minimal encoding).
 ///

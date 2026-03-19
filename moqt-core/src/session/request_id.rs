@@ -1,30 +1,30 @@
-//! # request_id: MOQT リクエスト ID の割り当て
+//! # request_id: MOQT request ID allocation
 //!
-//! MOQT では、SUBSCRIBE や PUBLISH_NAMESPACE などのリクエストに
-//! 一意な ID を割り当てる。ID の偶奇でリクエストの発信元を区別する:
-//! - クライアント（パブリッシャー/サブスクライバー）: 偶数（0, 2, 4, ...）
-//! - サーバー（リレー）: 奇数（1, 3, 5, ...）
+//! MOQT assigns a unique ID to each request (SUBSCRIBE, PUBLISH_NAMESPACE, etc.).
+//! Even/odd parity distinguishes the originator:
+//! - Client (publisher/subscriber): even (0, 2, 4, ...)
+//! - Server (relay): odd (1, 3, 5, ...)
 //!
-//! この方式により、双方が独立して ID を生成しても衝突しない。
+//! This scheme ensures both sides can independently generate IDs without collision.
 
-/// リクエスト ID のアロケータ。
-/// クライアント用（偶数）とサーバー用（奇数）を使い分ける。
+/// Request ID allocator.
+/// Produces even IDs for clients, odd IDs for servers.
 pub struct RequestIdAllocator {
     next_id: u64,
 }
 
 impl RequestIdAllocator {
-    /// クライアント用アロケータ（偶数 ID: 0, 2, 4, ...）を作成。
+    /// Create a client allocator (even IDs: 0, 2, 4, ...).
     pub fn client() -> Self {
         Self { next_id: 0 }
     }
 
-    /// サーバー用アロケータ（奇数 ID: 1, 3, 5, ...）を作成。
+    /// Create a server allocator (odd IDs: 1, 3, 5, ...).
     pub fn server() -> Self {
         Self { next_id: 1 }
     }
 
-    /// 次のリクエスト ID を割り当てる。毎回 2 ずつ増加する。
+    /// Allocate the next request ID. Increments by 2 each time.
     pub fn allocate(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 2;

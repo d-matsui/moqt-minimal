@@ -26,6 +26,7 @@ use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::control_stream::ControlStreamReader;
+use moqt_core::session::request_stream::RequestStreamReader;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -106,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Read SUBSCRIBE_OK
-    let mut sub_reader = ControlStreamReader::new(sub_recv);
+    let mut sub_reader = RequestStreamReader::new(sub_recv);
     let ok_bytes = sub_reader.read_message_bytes().await?;
     let mut slice = ok_bytes.as_slice();
     let subscribe_ok = SubscribeOkMessage::decode(&mut slice)?;

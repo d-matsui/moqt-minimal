@@ -52,7 +52,9 @@ use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::primitives::varint::decode_varint;
 use moqt_core::session::control_stream::ControlStreamReader;
+use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
 use moqt_core::session::request_id::RequestIdAllocator;
+use moqt_core::session::request_stream::RequestStreamReader;
 
 /// セッションの一意な識別子。接続ごとに連番で割り当てる。
 type SessionId = u64;
@@ -226,66 +228,6 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     Ok(())
 }
 
-/// QUIC RecvStream から正確に n バイトを読み取る。
-/// quinn の read() は要求より少ないバイト数を返すことがあるため、
-/// 必要量に達するまでループする。
-async fn read_exact(recv: &mut quinn::RecvStream, n: usize) -> Result<Vec<u8>> {
-    let mut buf = vec![0u8; n];
-    let mut filled = 0;
-    while filled < n {
-        match recv.read(&mut buf[filled..]).await {
-            Ok(Some(read)) => filled += read,
-            Ok(None) => {
-                bail!("stream ended after {filled}/{n} bytes");
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(buf)
-}
-
-/// QUIC RecvStream から varint を1つ読み取る。
-/// (デコードされた値, 生のバイト列) を返す。
-///
-/// control_stream.rs の read_varint と同じロジックだが、
-/// こちらは quinn::RecvStream を直接扱う（ControlStreamReader を経由しない）。
-/// データストリームの中継時に使われる。
-async fn read_varint_from_stream(recv: &mut quinn::RecvStream) -> Result<(u64, Vec<u8>)> {
-    let first = read_exact(recv, 1).await?;
-    let byte = first[0];
-    // 先頭バイトのプレフィックスビットから総バイト数を決定
-    let total_len = if byte & 0x80 == 0 {
-        1
-    } else if byte & 0xc0 == 0x80 {
-        2
-    } else if byte & 0xe0 == 0xc0 {
-        3
-    } else if byte & 0xf0 == 0xe0 {
-        4
-    } else if byte & 0xf8 == 0xf0 {
-        5
-    } else if byte & 0xfc == 0xf8 {
-        6
-    } else if byte == 0xfc {
-        bail!("invalid varint code point 0xFC");
-    } else if byte == 0xfe {
-        8
-    } else {
-        9
-    };
-
-    let mut raw = vec![0u8; total_len];
-    raw[0] = byte;
-    if total_len > 1 {
-        let rest = read_exact(recv, total_len - 1).await?;
-        raw[1..].copy_from_slice(&rest);
-    }
-
-    let mut slice = raw.as_slice();
-    let value = decode_varint(&mut slice)?;
-    Ok((value, raw))
-}
-
 /// パブリッシャーからの単方向データストリームを処理し、サブスクライバーに中継する。
 ///
 /// ## 中継の流れ
@@ -297,24 +239,19 @@ async fn read_varint_from_stream(recv: &mut quinn::RecvStream) -> Result<(u64, V
 /// 5. ストリーム終了（FIN）をサブスクライバーに伝搬
 async fn handle_incoming_uni(
     sender_session: SessionId,
-    mut recv: quinn::RecvStream,
+    recv: quinn::RecvStream,
     state: Arc<Mutex<RelayState>>,
 ) -> Result<()> {
-    // === SubgroupHeader の読み取り ===
-    // Type (varint) + Track Alias (varint) + Group ID (varint) を個別に読む
-    let (stream_type, type_bytes) = read_varint_from_stream(&mut recv).await?;
-    let (track_alias, alias_bytes) = read_varint_from_stream(&mut recv).await?;
-    let (_group_id, group_bytes) = read_varint_from_stream(&mut recv).await?;
+    let mut data_reader = DataStreamReader::new(recv);
 
-    // ビット4がセットされていれば Subgroup Header（仕様による）
-    if stream_type & 0x10 == 0 {
-        bail!("expected SUBGROUP_HEADER, got type 0x{stream_type:X}");
-    }
+    // === SubgroupHeader の読み取りと検証 ===
+    let (header, header_bytes) = data_reader.read_subgroup_header().await?;
+    let track_alias = header.track_alias;
 
     // === サブスクライバーの特定と下流ストリームの開設 ===
     // Track Alias と送信元セッションから対象の購読を見つけ、
     // 各サブスクライバーへの uni ストリームを開く
-    let subscriber_streams: Vec<quinn::SendStream> = {
+    let subscriber_writers: Vec<DataStreamWriter> = {
         let s = state.lock().await;
         let sub_conns: Vec<Connection> = s
             .subscriptions
@@ -331,86 +268,52 @@ async fn handle_incoming_uni(
         // ロックを解放してからストリームを開く（await を含むため）
         drop(s);
 
-        let mut streams = Vec::new();
+        let mut writers = Vec::new();
         for conn in sub_conns {
             match conn.open_uni().await {
-                Ok(stream) => streams.push(stream),
+                Ok(stream) => writers.push(DataStreamWriter::new(stream)),
                 Err(e) => eprintln!("failed to open uni to subscriber: {e}"),
             }
         }
-        streams
+        writers
     };
 
     // サブスクライバーがいなければ、ストリームを読み捨てる
-    if subscriber_streams.is_empty() {
-        let mut tmp = vec![0u8; 4096];
-        loop {
-            match recv.read(&mut tmp).await {
-                Ok(Some(_)) => continue,
-                Ok(None) => break,
-                Err(_) => break,
-            }
-        }
+    if subscriber_writers.is_empty() {
+        while let Ok(Some(_)) = data_reader.read_object().await {}
         return Ok(());
     }
 
     // === SubgroupHeader の転送 ===
     // 読み取った生バイト列をそのままサブスクライバーに書き込む
-    let mut header_bytes = Vec::new();
-    header_bytes.extend_from_slice(&type_bytes);
-    header_bytes.extend_from_slice(&alias_bytes);
-    header_bytes.extend_from_slice(&group_bytes);
-
-    let subscriber_streams: Vec<Arc<Mutex<quinn::SendStream>>> = subscriber_streams
+    let subscriber_writers: Vec<Arc<Mutex<DataStreamWriter>>> = subscriber_writers
         .into_iter()
-        .map(|s| Arc::new(Mutex::new(s)))
+        .map(|w| Arc::new(Mutex::new(w)))
         .collect();
 
-    for stream in &subscriber_streams {
-        stream.lock().await.write_all(&header_bytes).await?;
+    for writer in &subscriber_writers {
+        writer.lock().await.write_raw(&header_bytes).await?;
     }
 
     // === オブジェクトの逐次中継 ===
     // オブジェクトを1つずつ読み、即座に全サブスクライバーに転送する。
     // バッファリングしないため、大きなストリームでもメモリ使用量が抑えられる。
-    loop {
-        // Object ID Delta (varint) を読む
-        let delta_result = read_varint_from_stream(&mut recv).await;
-        let (_delta, delta_bytes) = match delta_result {
-            Ok(v) => v,
-            Err(e) => {
-                // ストリーム FIN または読み取りエラー → ストリーム終了として扱う
-                let is_eof = e.downcast_ref::<quinn::ReadExactError>().is_some()
-                    || e.to_string().contains("stream ended");
-                if is_eof {
-                    break;
-                }
-                return Err(e);
-            }
-        };
-
-        // Payload Length (varint) を読む
-        let (payload_len, len_bytes) = read_varint_from_stream(&mut recv).await?;
-
-        // ペイロード本体を読む
-        let payload = read_exact(&mut recv, payload_len as usize).await?;
-
+    while let Some((_obj, payload, obj_header_bytes)) = data_reader.read_object().await? {
         // 全サブスクライバーに即座に転送
         // エラーが発生しても他のサブスクライバーへの転送は継続する
-        for stream in &subscriber_streams {
-            let mut s = stream.lock().await;
-            let _ = s.write_all(&delta_bytes).await;
-            let _ = s.write_all(&len_bytes).await;
-            let _ = s.write_all(&payload).await;
+        for writer in &subscriber_writers {
+            let mut w = writer.lock().await;
+            let _ = w.write_raw(&obj_header_bytes).await;
+            let _ = w.write_raw(&payload).await;
         }
     }
 
     // === ストリーム終了の伝搬 ===
     // パブリッシャーのストリームが終了したら、
     // サブスクライバーのストリームも finish() で FIN を送る
-    for stream in subscriber_streams {
-        let mut s = stream.lock().await;
-        let _ = s.finish();
+    for writer in subscriber_writers {
+        let mut w = writer.lock().await;
+        let _ = w.finish();
     }
 
     Ok(())
@@ -425,7 +328,7 @@ async fn handle_bidi_stream(
     state: Arc<Mutex<RelayState>>,
     connection: Connection,
 ) -> Result<()> {
-    let mut reader = ControlStreamReader::new(recv);
+    let mut reader = RequestStreamReader::new(recv);
     let msg_bytes = reader.read_message_bytes().await?;
 
     // メッセージタイプを先読みして分岐を決定
@@ -580,7 +483,7 @@ async fn handle_subscribe(
     pub_send.write_all(&buf).await?;
 
     // === SUBSCRIBE_OK の受信と転送 ===
-    let mut pub_reader = ControlStreamReader::new(pub_recv);
+    let mut pub_reader = RequestStreamReader::new(pub_recv);
     let ok_bytes = pub_reader.read_message_bytes().await?;
     let mut ok_slice = ok_bytes.as_slice();
     let subscribe_ok = SubscribeOkMessage::decode(&mut ok_slice)?;

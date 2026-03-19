@@ -1,11 +1,17 @@
-//! # session: MOQT セッション管理
+//! # session: MOQT session management
 //!
-//! QUIC 接続上での MOQT セッションを管理するためのユーティリティ。
+//! Utilities for managing MOQT sessions over QUIC connections.
 //!
-//! - `control_stream`: コントロールストリームの読み書き（非同期 QUIC ストリーム対応）
-//! - `request_id`: リクエスト ID の割り当て（クライアント=偶数、サーバー=奇数）
-//! - `quic_config`: QUIC/TLS の設定ヘルパー
+//! - `control_stream`: Control stream (unidirectional) — SETUP / GOAWAY
+//! - `request_stream`: Request stream (bidirectional) — SUBSCRIBE, PUBLISH_NAMESPACE, etc.
+//! - `data_stream`: Data stream (unidirectional) — SubgroupHeader + Objects
+//! - `stream_utils`: Shared low-level readers (varint, message frame)
+//! - `request_id`: Request ID allocation (client=even, server=odd)
+//! - `quic_config`: QUIC/TLS configuration helpers
 
 pub mod control_stream;
+pub mod data_stream;
 pub mod quic_config;
 pub mod request_id;
+pub mod request_stream;
+pub mod stream_utils;

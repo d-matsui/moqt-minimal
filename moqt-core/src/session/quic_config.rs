@@ -1,21 +1,21 @@
-//! # quic_config: QUIC/TLS 設定ヘルパー
+//! # quic_config: QUIC/TLS configuration helpers
 //!
-//! MOQT は QUIC 上で動作するため、QUIC 接続の TLS 設定が必要。
-//! このモジュールは、サーバー側とクライアント側の設定を簡単に作成する
-//! ヘルパー関数を提供する。
+//! MOQT runs over QUIC, so TLS configuration is required for connections.
+//! This module provides helper functions to easily create server-side and
+//! client-side QUIC configurations.
 //!
 //! ## ALPN (Application-Layer Protocol Negotiation)
-//! TLS ハンドシェイク時に、両端が MOQT プロトコルを使うことを合意するために
-//! ALPN プロトコル ID として "moqt-17" を指定する。
+//! During the TLS handshake, both endpoints agree on the MOQT protocol
+//! by specifying "moqt-17" as the ALPN protocol ID.
 
 use std::sync::Arc;
 
-/// MOQT draft-17 用の ALPN プロトコル識別子。
-/// TLS ハンドシェイクで互いにプロトコルを確認するために使用される。
+/// ALPN protocol identifier for MOQT draft-17.
+/// Used during TLS handshake for protocol negotiation.
 pub const ALPN: &[u8] = b"moqt-17";
 
-/// 指定された証明書と秘密鍵を使って QUIC サーバー設定を作成する。
-/// リレーサーバーで使用される。
+/// Create a QUIC server configuration with the given certificate and private key.
+/// Used by the relay server.
 pub fn make_server_config(
     cert_der: rustls_pki_types::CertificateDer<'static>,
     key_der: rustls_pki_types::PrivateKeyDer<'static>,
@@ -31,11 +31,11 @@ pub fn make_server_config(
     quinn::ServerConfig::with_crypto(Arc::new(quic_server_config))
 }
 
-/// 指定された証明書を信頼する QUIC クライアント設定を作成する。
-/// パブリッシャーやサブスクライバーで使用される。
+/// Create a QUIC client configuration that trusts the given certificate.
+/// Used by publishers and subscribers.
 ///
-/// 本番環境では CA 署名の証明書を使うが、開発時は自己署名証明書を
-/// この関数で信頼させる。
+/// In production, CA-signed certificates are used; during development,
+/// self-signed certificates are trusted via this function.
 pub fn make_client_config(
     cert_der: rustls_pki_types::CertificateDer<'static>,
 ) -> quinn::ClientConfig {
