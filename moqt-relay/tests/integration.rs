@@ -22,7 +22,7 @@ use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::control_stream::ControlStreamReader;
+use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use moqt_core::session::quic_config;
 use moqt_core::session::request_stream::RequestStreamReader;
 
@@ -70,16 +70,15 @@ async fn connect_client(
         .unwrap();
 
     // Send SETUP on our control stream
-    let mut ctrl_send = connection.open_uni().await.unwrap();
+    let ctrl_send = connection.open_uni().await.unwrap();
+    let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
     let setup = SetupMessage {
         setup_options: vec![
             SetupOption::Path(b"/".to_vec()),
             SetupOption::Authority(b"localhost".to_vec()),
         ],
     };
-    let mut buf = Vec::new();
-    setup.encode(&mut buf).unwrap();
-    ctrl_send.write_all(&buf).await.unwrap();
+    ctrl_writer.write_setup(&setup).await.unwrap();
 
     // Accept relay's control stream and read SETUP
     let recv = connection.accept_uni().await.unwrap();
@@ -123,13 +122,12 @@ async fn session_setup() {
         if let Some(incoming) = ep.accept().await {
             let conn = incoming.await.unwrap();
             // Send SETUP
-            let mut ctrl = conn.open_uni().await.unwrap();
+            let ctrl = conn.open_uni().await.unwrap();
+            let mut ctrl_writer = ControlStreamWriter::new(ctrl);
             let setup = SetupMessage {
                 setup_options: vec![],
             };
-            let mut buf = Vec::new();
-            setup.encode(&mut buf).unwrap();
-            ctrl.write_all(&buf).await.unwrap();
+            ctrl_writer.write_setup(&setup).await.unwrap();
             // Accept peer's SETUP
             let recv = conn.accept_uni().await.unwrap();
             let mut reader = ControlStreamReader::new(recv);

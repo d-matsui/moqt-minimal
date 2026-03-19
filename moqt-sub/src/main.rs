@@ -25,7 +25,7 @@ use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::control_stream::ControlStreamReader;
+use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use moqt_core::session::request_stream::RequestStreamReader;
 
 #[tokio::main]
@@ -68,17 +68,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // SETUP exchange
-    let mut ctrl_send = connection.open_uni().await?;
+    let ctrl_send = connection.open_uni().await?;
+    let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
     let setup = SetupMessage {
         setup_options: vec![
             SetupOption::Path(b"/".to_vec()),
             SetupOption::Authority(b"localhost".to_vec()),
         ],
     };
-    let mut buf = Vec::new();
-    setup.encode(&mut buf)?;
-    ctrl_send.write_all(&buf).await?;
+    ctrl_writer.write_setup(&setup).await?;
 
+    let mut buf = Vec::new();
     let recv = connection.accept_uni().await?;
     let mut reader = ControlStreamReader::new(recv);
     let _relay_setup = reader.read_setup().await?;

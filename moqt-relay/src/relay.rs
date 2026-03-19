@@ -51,7 +51,7 @@ use moqt_core::message::{MSG_PUBLISH_NAMESPACE, MSG_SUBSCRIBE};
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::primitives::varint::decode_varint;
-use moqt_core::session::control_stream::ControlStreamReader;
+use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
 use moqt_core::session::request_id::RequestIdAllocator;
 use moqt_core::session::request_stream::RequestStreamReader;
@@ -156,15 +156,14 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
         id
     };
 
-    // === SETUP 交換 ===
-    // サーバーからクライアントへ: 空の SETUP を送信
-    let mut our_ctrl_send = connection.open_uni().await?;
+    // === SETUP exchange ===
+    // Server -> Client: send empty SETUP
+    let our_ctrl_send = connection.open_uni().await?;
+    let mut ctrl_writer = ControlStreamWriter::new(our_ctrl_send);
     let server_setup = SetupMessage {
         setup_options: vec![],
     };
-    let mut setup_buf = Vec::new();
-    server_setup.encode(&mut setup_buf)?;
-    our_ctrl_send.write_all(&setup_buf).await?;
+    ctrl_writer.write_setup(&server_setup).await?;
 
     // クライアントからサーバーへ: SETUP を受信
     let peer_ctrl_recv = connection.accept_uni().await?;
