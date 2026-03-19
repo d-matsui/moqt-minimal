@@ -31,12 +31,11 @@ use moqt_core::data::object::ObjectHeader;
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::publish_done::PublishDoneMessage;
 use moqt_core::message::publish_namespace::PublishNamespaceMessage;
-use moqt_core::message::setup::{SetupMessage, SetupOption};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use moqt_core::session::data_stream::DataStreamWriter;
+use moqt_core::session::moqt_session::MoqtSession;
 use moqt_core::session::request_stream::{
     RequestMessage, RequestStreamReader, RequestStreamWriter,
 };
@@ -79,19 +78,8 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Connected.");
 
     // === SETUP exchange ===
-    let ctrl_send = connection.open_uni().await?;
-    let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
-    let setup = SetupMessage {
-        setup_options: vec![
-            SetupOption::Path(b"/".to_vec()),
-            SetupOption::Authority(b"localhost".to_vec()),
-        ],
-    };
-    ctrl_writer.write_setup(&setup).await?;
-
-    let recv = connection.accept_uni().await?;
-    let mut reader = ControlStreamReader::new(recv);
-    let _relay_setup = reader.read_setup().await?;
+    let session = MoqtSession::connect(connection.clone()).await?;
+    let connection = session.connection().clone();
     eprintln!("SETUP exchange complete.");
 
     // === PUBLISH_NAMESPACE ===

@@ -2,6 +2,7 @@
 //!
 //! Utilities for managing MOQT sessions over QUIC connections.
 //!
+//! - `moqt_session`: MOQT session (SETUP exchange + connection wrapper)
 //! - `control_stream`: Control stream (unidirectional) — SETUP / GOAWAY
 //! - `request_stream`: Request stream (bidirectional) — SUBSCRIBE, PUBLISH_NAMESPACE, etc.
 //! - `data_stream`: Data stream (unidirectional) — SubgroupHeader + Objects
@@ -11,6 +12,7 @@
 
 pub mod control_stream;
 pub mod data_stream;
+pub mod moqt_session;
 pub mod quic_config;
 pub mod request_id;
 pub mod request_stream;

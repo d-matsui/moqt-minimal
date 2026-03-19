@@ -42,12 +42,11 @@ use tokio::sync::Mutex;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::request_error::RequestErrorMessage;
 use moqt_core::message::request_ok::RequestOkMessage;
-use moqt_core::message::setup::SetupMessage;
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
+use moqt_core::session::moqt_session::MoqtSession;
 use moqt_core::session::request_id::RequestIdAllocator;
 use moqt_core::session::request_stream::{
     RequestMessage, RequestStreamReader, RequestStreamWriter,
@@ -154,18 +153,8 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     };
 
     // === SETUP exchange ===
-    // Server -> Client: send empty SETUP
-    let our_ctrl_send = connection.open_uni().await?;
-    let mut ctrl_writer = ControlStreamWriter::new(our_ctrl_send);
-    let server_setup = SetupMessage {
-        setup_options: vec![],
-    };
-    ctrl_writer.write_setup(&server_setup).await?;
-
-    // Client -> Server: receive SETUP
-    let peer_ctrl_recv = connection.accept_uni().await?;
-    let mut ctrl_reader = ControlStreamReader::new(peer_ctrl_recv);
-    let _peer_setup = ctrl_reader.read_setup().await?;
+    let session = MoqtSession::accept(connection.clone()).await?;
+    let connection = session.connection().clone();
 
     // === Main loop: process bidi and uni streams concurrently ===
     // Use tokio::select! to await both simultaneously and process whichever arrives first.
