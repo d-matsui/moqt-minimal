@@ -14,9 +14,19 @@ use crate::message::subscribe::SubscribeMessage;
 use crate::primitives::track_namespace::TrackNamespace;
 use crate::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use crate::session::data_stream::DataStreamReader;
+use crate::session::publish_namespace_request::PublishNamespaceRequest;
 use crate::session::request_id::RequestIdAllocator;
 use crate::session::request_stream::{RequestMessage, RequestStreamReader, RequestStreamWriter};
+use crate::session::subscribe_request::SubscribeRequest;
 use crate::session::subscription::Subscription;
+
+/// An incoming request event from the peer.
+pub enum RequestEvent {
+    /// A SUBSCRIBE request was received.
+    Subscribe(SubscribeRequest),
+    /// A PUBLISH_NAMESPACE request was received.
+    PublishNamespace(PublishNamespaceRequest),
+}
 
 /// A MOQT session over a QUIC connection.
 /// Created after SETUP exchange is complete.
@@ -129,6 +139,26 @@ impl MoqtSession {
                 )
             }
             _ => bail!("unexpected response to SUBSCRIBE"),
+        }
+    }
+
+    /// Wait for the next incoming request on a bidi stream.
+    /// Accepts a bidi stream, reads the first message, and returns
+    /// a typed RequestEvent.
+    pub async fn next_request(&self) -> Result<RequestEvent> {
+        let (send, recv) = self.connection.accept_bi().await?;
+        let writer = RequestStreamWriter::new(send);
+        let mut reader = RequestStreamReader::new(recv);
+        let msg = reader.read_message().await?;
+
+        match msg {
+            RequestMessage::Subscribe(sub) => {
+                Ok(RequestEvent::Subscribe(SubscribeRequest::new(sub, writer)))
+            }
+            RequestMessage::PublishNamespace(pub_ns) => Ok(RequestEvent::PublishNamespace(
+                PublishNamespaceRequest::new(pub_ns, writer),
+            )),
+            _ => bail!("unexpected message on request stream"),
         }
     }
 

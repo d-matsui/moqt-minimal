@@ -13,8 +13,10 @@
 pub mod control_stream;
 pub mod data_stream;
 pub mod moqt_session;
+pub mod publish_namespace_request;
 pub mod quic_config;
 pub mod request_id;
 pub mod request_stream;
 pub mod stream_utils;
+pub mod subscribe_request;
 pub mod subscription;
