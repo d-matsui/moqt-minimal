@@ -6,12 +6,14 @@
 use anyhow::{Result, bail};
 use quinn::Connection;
 
+use crate::data::subgroup_header::SubgroupHeader;
 use crate::message::parameter::MessageParameter;
 use crate::message::publish_namespace::PublishNamespaceMessage;
 use crate::message::setup::{SetupMessage, SetupOption};
 use crate::message::subscribe::SubscribeMessage;
 use crate::primitives::track_namespace::TrackNamespace;
 use crate::session::control_stream::{ControlStreamReader, ControlStreamWriter};
+use crate::session::data_stream::DataStreamReader;
 use crate::session::request_id::RequestIdAllocator;
 use crate::session::request_stream::{RequestMessage, RequestStreamReader, RequestStreamWriter};
 use crate::session::subscription::Subscription;
@@ -128,6 +130,16 @@ impl MoqtSession {
             }
             _ => bail!("unexpected response to SUBSCRIBE"),
         }
+    }
+
+    /// Accept an incoming data stream (unidirectional).
+    /// Reads the SubgroupHeader and returns it along with a DataStreamReader
+    /// for reading subsequent Objects.
+    pub async fn accept_data_stream(&self) -> Result<(SubgroupHeader, DataStreamReader)> {
+        let recv = self.connection.accept_uni().await?;
+        let mut reader = DataStreamReader::new(recv);
+        let (header, _raw) = reader.read_subgroup_header().await?;
+        Ok((header, reader))
     }
 
     /// Get a reference to the underlying QUIC connection.
