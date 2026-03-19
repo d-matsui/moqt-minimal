@@ -15,7 +15,6 @@ fn init_crypto() {
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::publish_done::PublishDoneMessage;
-use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
@@ -57,7 +56,7 @@ async fn start_relay() -> (
 async fn connect_client(
     relay_addr: SocketAddr,
     cert_der: rustls_pki_types::CertificateDer<'static>,
-) -> quinn::Connection {
+) -> MoqtSession {
     let client_config = quic_config::make_client_config(cert_der);
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(client_config);
@@ -69,25 +68,12 @@ async fn connect_client(
         .unwrap();
 
     // SETUP exchange
-    let session = MoqtSession::connect(connection.clone()).await.unwrap();
-
-    session.connection().clone()
+    MoqtSession::connect(connection).await.unwrap()
 }
 
 /// Helper: send PUBLISH_NAMESPACE and receive REQUEST_OK
-async fn publish_namespace(conn: &quinn::Connection, namespace: TrackNamespace) {
-    let (send, recv) = conn.open_bi().await.unwrap();
-    let mut writer = RequestStreamWriter::new(send);
-    let msg = PublishNamespaceMessage {
-        request_id: 0,
-        required_request_id_delta: 0,
-        track_namespace: namespace,
-    };
-    writer.write_publish_namespace(&msg).await.unwrap();
-
-    let mut reader = RequestStreamReader::new(recv);
-    let response = reader.read_message().await.unwrap();
-    assert!(matches!(response, RequestMessage::RequestOk(_)));
+async fn publish_namespace(session: &mut MoqtSession, namespace: TrackNamespace) {
+    session.publish_namespace(namespace).await.unwrap();
 }
 
 // ============================================================
@@ -109,7 +95,7 @@ async fn session_setup() {
         }
     });
 
-    let _conn = connect_client(addr, cert_der).await;
+    let _session = connect_client(addr, cert_der).await;
     // If we get here, SETUP exchange succeeded
 }
 
@@ -128,11 +114,11 @@ async fn publish_namespace_registration() {
     // Wait for relay to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let conn = connect_client(addr, cert_der).await;
+    let mut pub_session = connect_client(addr, cert_der).await;
 
     // Send PUBLISH_NAMESPACE
     publish_namespace(
-        &conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -155,9 +141,9 @@ async fn subscribe_via_relay() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher connects and registers namespace
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -165,9 +151,9 @@ async fn subscribe_via_relay() {
     .await;
 
     // Publisher: spawn task to accept SUBSCRIBE and respond with SUBSCRIBE_OK
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     tokio::spawn(async move {
-        let (send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let (send, recv) = pub_conn.accept_bi().await.unwrap();
         let mut reader = RequestStreamReader::new(recv);
         let msg = reader.read_message().await.unwrap();
         assert!(matches!(msg, RequestMessage::Subscribe(_)));
@@ -182,7 +168,8 @@ async fn subscribe_via_relay() {
     });
 
     // Subscriber connects and sends SUBSCRIBE
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
+    let sub_conn = sub_session.connection().clone();
     let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
     let mut sub_writer = RequestStreamWriter::new(sub_send);
     let subscribe = SubscribeMessage {
@@ -222,9 +209,9 @@ async fn object_forwarding() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher setup
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -232,9 +219,9 @@ async fn object_forwarding() {
     .await;
 
     // Publisher: accept SUBSCRIBE, respond, then send objects
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let (send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let (send, recv) = pub_conn.accept_bi().await.unwrap();
         let mut reader = RequestStreamReader::new(recv);
         let msg = reader.read_message().await.unwrap();
         assert!(matches!(msg, RequestMessage::Subscribe(_)));
@@ -248,7 +235,7 @@ async fn object_forwarding() {
         writer.write_subscribe_ok(&ok).await.unwrap();
 
         // Send a subgroup with 2 objects
-        let mut uni = pub_conn2.open_uni().await.unwrap();
+        let mut uni = pub_conn.open_uni().await.unwrap();
         let header = SubgroupHeader {
             track_alias: 1,
             group_id: 0,
@@ -279,7 +266,8 @@ async fn object_forwarding() {
     });
 
     // Subscriber setup
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
+    let sub_conn = sub_session.connection().clone();
     let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
     let mut sub_writer = RequestStreamWriter::new(sub_send);
     let subscribe = SubscribeMessage {
@@ -347,9 +335,9 @@ async fn publish_done_forwarding() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher setup
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -357,9 +345,9 @@ async fn publish_done_forwarding() {
     .await;
 
     // Publisher: accept SUBSCRIBE, respond, send object, then PUBLISH_DONE
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     tokio::spawn(async move {
-        let (send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let (send, recv) = pub_conn.accept_bi().await.unwrap();
         let mut reader = RequestStreamReader::new(recv);
         let msg = reader.read_message().await.unwrap();
         assert!(matches!(msg, RequestMessage::Subscribe(_)));
@@ -373,7 +361,7 @@ async fn publish_done_forwarding() {
         writer.write_subscribe_ok(&ok).await.unwrap();
 
         // Send one object
-        let mut uni = pub_conn2.open_uni().await.unwrap();
+        let mut uni = pub_conn.open_uni().await.unwrap();
         let header = SubgroupHeader {
             track_alias: 1,
             group_id: 0,
@@ -403,7 +391,8 @@ async fn publish_done_forwarding() {
     });
 
     // Subscriber setup
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
+    let sub_conn = sub_session.connection().clone();
     let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
     let mut sub_writer = RequestStreamWriter::new(sub_send);
     let subscribe = SubscribeMessage {
@@ -443,9 +432,9 @@ async fn multiple_groups() {
     tokio::spawn(async move { relay.run().await.unwrap() });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -453,9 +442,9 @@ async fn multiple_groups() {
     .await;
 
     // Publisher: accept SUBSCRIBE, send 3 groups with 2 objects each
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let (send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let (send, recv) = pub_conn.accept_bi().await.unwrap();
         let mut reader = RequestStreamReader::new(recv);
         let msg = reader.read_message().await.unwrap();
         assert!(matches!(msg, RequestMessage::Subscribe(_)));
@@ -469,7 +458,7 @@ async fn multiple_groups() {
         writer.write_subscribe_ok(&ok).await.unwrap();
 
         for group_id in 0u64..3 {
-            let mut uni = pub_conn2.open_uni().await.unwrap();
+            let mut uni = pub_conn.open_uni().await.unwrap();
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
@@ -504,7 +493,8 @@ async fn multiple_groups() {
     });
 
     // Subscriber
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
+    let sub_conn = sub_session.connection().clone();
     let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
     let mut sub_writer = RequestStreamWriter::new(sub_send);
     let subscribe = SubscribeMessage {
@@ -590,9 +580,9 @@ async fn late_join() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher connects first and registers
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -600,9 +590,9 @@ async fn late_join() {
     .await;
 
     // Publisher: accept SUBSCRIBE (will come later), respond, send objects
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let (send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let (send, recv) = pub_conn.accept_bi().await.unwrap();
         let mut reader = RequestStreamReader::new(recv);
         let msg = reader.read_message().await.unwrap();
         assert!(matches!(msg, RequestMessage::Subscribe(_)));
@@ -617,7 +607,7 @@ async fn late_join() {
 
         // Send 2 groups after subscriber joins
         for group_id in 0u64..2 {
-            let mut uni = pub_conn2.open_uni().await.unwrap();
+            let mut uni = pub_conn.open_uni().await.unwrap();
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
@@ -652,7 +642,8 @@ async fn late_join() {
     // Subscriber connects AFTER publisher is ready (simulating late join)
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
+    let sub_conn = sub_session.connection().clone();
     let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
     let mut sub_writer = RequestStreamWriter::new(sub_send);
     let subscribe = SubscribeMessage {
@@ -738,7 +729,7 @@ async fn subscribe_unknown_namespace() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Subscriber connects (no publisher registered)
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_conn = connect_client(addr, cert_der).await.connection().clone();
     let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
     let mut sub_writer = RequestStreamWriter::new(sub_send);
     let subscribe = SubscribeMessage {
@@ -774,9 +765,9 @@ async fn multiple_subscribers() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher setup
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -784,10 +775,10 @@ async fn multiple_subscribers() {
     .await;
 
     // Publisher: accept 2 SUBSCRIBE (one per subscriber), respond to each, then send objects
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         // Accept first SUBSCRIBE
-        let (send1, recv1) = pub_conn2.accept_bi().await.unwrap();
+        let (send1, recv1) = pub_conn.accept_bi().await.unwrap();
         let mut reader1 = RequestStreamReader::new(recv1);
         let msg1 = reader1.read_message().await.unwrap();
         assert!(matches!(msg1, RequestMessage::Subscribe(_)));
@@ -800,7 +791,7 @@ async fn multiple_subscribers() {
         writer1.write_subscribe_ok(&ok).await.unwrap();
 
         // Accept second SUBSCRIBE
-        let (send2, recv2) = pub_conn2.accept_bi().await.unwrap();
+        let (send2, recv2) = pub_conn.accept_bi().await.unwrap();
         let mut reader2 = RequestStreamReader::new(recv2);
         let msg2 = reader2.read_message().await.unwrap();
         assert!(matches!(msg2, RequestMessage::Subscribe(_)));
@@ -811,7 +802,7 @@ async fn multiple_subscribers() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Send 1 group with 1 object
-        let mut uni = pub_conn2.open_uni().await.unwrap();
+        let mut uni = pub_conn.open_uni().await.unwrap();
         let header = SubgroupHeader {
             track_alias: 1,
             group_id: 0,
@@ -846,7 +837,8 @@ async fn multiple_subscribers() {
         addr: SocketAddr,
         cert_der: rustls_pki_types::CertificateDer<'static>,
     ) -> Vec<u8> {
-        let conn = connect_client(addr, cert_der).await;
+        let session = connect_client(addr, cert_der).await;
+        let conn = session.connection().clone();
         let (sub_send, sub_recv) = conn.open_bi().await.unwrap();
         let mut sub_writer = RequestStreamWriter::new(sub_send);
         let subscribe = SubscribeMessage {
@@ -907,9 +899,9 @@ async fn multiple_tracks() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -917,10 +909,10 @@ async fn multiple_tracks() {
     .await;
 
     // Publisher: accept 2 SUBSCRIBEs (video + audio), send objects on each
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         // Accept SUBSCRIBE for video (alias=1)
-        let (send_v, recv_v) = pub_conn2.accept_bi().await.unwrap();
+        let (send_v, recv_v) = pub_conn.accept_bi().await.unwrap();
         let mut reader_v = RequestStreamReader::new(recv_v);
         let _ = reader_v.read_message().await.unwrap();
         let mut writer_v = RequestStreamWriter::new(send_v);
@@ -932,7 +924,7 @@ async fn multiple_tracks() {
         writer_v.write_subscribe_ok(&ok_v).await.unwrap();
 
         // Accept SUBSCRIBE for audio (alias=2)
-        let (send_a, recv_a) = pub_conn2.accept_bi().await.unwrap();
+        let (send_a, recv_a) = pub_conn.accept_bi().await.unwrap();
         let mut reader_a = RequestStreamReader::new(recv_a);
         let _ = reader_a.read_message().await.unwrap();
         let mut writer_a = RequestStreamWriter::new(send_a);
@@ -946,7 +938,7 @@ async fn multiple_tracks() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Send video object
-        let mut uni_v = pub_conn2.open_uni().await.unwrap();
+        let mut uni_v = pub_conn.open_uni().await.unwrap();
         let mut data_v = Vec::new();
         SubgroupHeader {
             track_alias: 1,
@@ -967,7 +959,7 @@ async fn multiple_tracks() {
         uni_v.finish().unwrap();
 
         // Send audio object
-        let mut uni_a = pub_conn2.open_uni().await.unwrap();
+        let mut uni_a = pub_conn.open_uni().await.unwrap();
         let mut data_a = Vec::new();
         SubgroupHeader {
             track_alias: 2,
@@ -998,7 +990,8 @@ async fn multiple_tracks() {
     });
 
     // Subscriber: subscribe to both tracks
-    let sub_conn = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
+    let sub_conn = sub_session.connection().clone();
 
     // Subscribe to video
     let (sub_send_v, sub_recv_v) = sub_conn.open_bi().await.unwrap();
@@ -1069,9 +1062,9 @@ async fn subscriber_disconnect() {
     tokio::spawn(async move { relay.run().await.unwrap() });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let pub_conn = connect_client(addr, cert_der.clone()).await;
+    let mut pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &pub_conn,
+        &mut pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -1079,9 +1072,9 @@ async fn subscriber_disconnect() {
     .await;
 
     // Publisher: accept SUBSCRIBE, respond, send objects continuously
-    let pub_conn2 = pub_conn.clone();
+    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let (send, recv) = pub_conn2.accept_bi().await.unwrap();
+        let (send, recv) = pub_conn.accept_bi().await.unwrap();
         let mut reader = RequestStreamReader::new(recv);
         let _ = reader.read_message().await.unwrap();
         let mut writer = RequestStreamWriter::new(send);
@@ -1094,7 +1087,7 @@ async fn subscriber_disconnect() {
 
         // Send a few groups
         for group_id in 0u64..3 {
-            let mut uni = pub_conn2.open_uni().await.unwrap();
+            let mut uni = pub_conn.open_uni().await.unwrap();
             let mut data = Vec::new();
             SubgroupHeader {
                 track_alias: 1,
@@ -1118,14 +1111,15 @@ async fn subscriber_disconnect() {
 
         // Publisher connection should still be alive
         assert!(
-            pub_conn2.close_reason().is_none(),
+            pub_conn.close_reason().is_none(),
             "publisher should still be connected"
         );
     });
 
     // Subscriber connects, subscribes, receives 1 group, then disconnects
     {
-        let sub_conn = connect_client(addr, cert_der).await;
+        let sub_session = connect_client(addr, cert_der).await;
+        let sub_conn = sub_session.connection().clone();
         let (sub_send, sub_recv) = sub_conn.open_bi().await.unwrap();
         let mut sub_writer = RequestStreamWriter::new(sub_send);
         let subscribe = SubscribeMessage {

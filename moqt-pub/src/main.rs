@@ -30,7 +30,6 @@ use std::time::Duration;
 use moqt_core::data::object::ObjectHeader;
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::publish_done::PublishDoneMessage;
-use moqt_core::message::publish_namespace::PublishNamespaceMessage;
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
@@ -78,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Connected.");
 
     // === SETUP exchange ===
-    let session = MoqtSession::connect(connection.clone()).await?;
+    let mut session = MoqtSession::connect(connection.clone()).await?;
     let connection = session.connection().clone();
     eprintln!("SETUP exchange complete.");
 
@@ -86,16 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let ns = TrackNamespace {
         fields: vec![namespace.as_bytes().to_vec()],
     };
-    let (ns_send, ns_recv) = connection.open_bi().await?;
-    let mut ns_writer = RequestStreamWriter::new(ns_send);
-    let mut ns_reader = RequestStreamReader::new(ns_recv);
-    let pub_ns = PublishNamespaceMessage {
-        request_id: 0,
-        required_request_id_delta: 0,
-        track_namespace: ns.clone(),
-    };
-    ns_writer.write_publish_namespace(&pub_ns).await?;
-    let _ok = ns_reader.read_message().await?;
+    session.publish_namespace(ns.clone()).await?;
     eprintln!("PUBLISH_NAMESPACE registered.");
 
     // === Wait for SUBSCRIBE ===
