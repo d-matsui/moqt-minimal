@@ -179,7 +179,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
                         let state = state.clone();
                         let conn = connection.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_bidi_stream(session_id, send, recv, state, conn).await {
+                            if let Err(e) = handle_request_stream(session_id, send, recv, state, conn).await {
                                 eprintln!("bidi stream error: {e}");
                             }
                         });
@@ -195,7 +195,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
                         let state = state.clone();
                         let sid = session_id;
                         tokio::spawn(async move {
-                            if let Err(e) = handle_incoming_uni(sid, recv, state).await {
+                            if let Err(e) = handle_data_stream(sid, recv, state).await {
                                 eprintln!("uni stream error: {e}");
                             }
                         });
@@ -233,7 +233,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
 /// 4. オブジェクトを1つずつ読みながら即座にサブスクライバーに転送
 ///    （ストリーム全体をバッファリングせず、低遅延で中継する）
 /// 5. ストリーム終了（FIN）をサブスクライバーに伝搬
-async fn handle_incoming_uni(
+async fn handle_data_stream(
     sender_session: SessionId,
     recv: quinn::RecvStream,
     state: Arc<Mutex<RelayState>>,
@@ -317,7 +317,7 @@ async fn handle_incoming_uni(
 
 /// Handle a request (bidi) stream.
 /// Read the first message and dispatch to the appropriate handler.
-async fn handle_bidi_stream(
+async fn handle_request_stream(
     session_id: SessionId,
     send: quinn::SendStream,
     recv: quinn::RecvStream,
