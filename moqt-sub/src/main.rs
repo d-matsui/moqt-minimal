@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use moqt_core::data::object::resolve_object_id;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::MoqtSession;
+use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -92,7 +92,12 @@ async fn main() -> anyhow::Result<()> {
         let mut ivf_header_written = false;
         let mut frame_index: u64 = 0;
 
-        while let Ok((header, mut data_reader)) = session.accept_data_stream().await {
+        loop {
+            let (header, mut data_reader) = match session.next_event().await {
+                Ok(SessionEvent::DataStream(h, r)) => (h, r),
+                Ok(_) => continue, // ignore non-data events
+                Err(_) => break,   // connection closed
+            };
             if pipe_mode {
                 // Pipe mode: write IVF container to stdout
                 // Write IVF file header once

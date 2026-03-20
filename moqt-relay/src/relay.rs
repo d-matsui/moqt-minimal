@@ -46,7 +46,7 @@ use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::request_error::{ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED};
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::DataStreamReader;
-use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
+use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 use moqt_core::session::subscribe_request::SubscribeRequest;
 
 /// Unique identifier for a session. Assigned sequentially per connection.
@@ -206,35 +206,40 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
 
     let session_id = state.lock().await.register_session(session.clone());
 
-    // === Main loop: process requests and data streams concurrently ===
+    // === Main loop: handle events until the connection closes ===
     loop {
-        tokio::select! {
-            request = session.next_request() => {
-                match request {
-                    Ok(event) => {
-                        let state = state.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = handle_request_event(session_id, event, state).await {
-                                eprintln!("request error: {e}");
-                            }
-                        });
+        let event = match session.next_event().await {
+            Ok(event) => event,
+            Err(_) => break, // connection closed
+        };
+
+        let state = state.clone();
+        let sid = session_id;
+        match event {
+            SessionEvent::Subscribe(request) => {
+                tokio::spawn(async move {
+                    if let Err(e) = handle_subscribe(sid, request, state).await {
+                        eprintln!("subscribe error: {e}");
                     }
-                    Err(_) => break,
-                }
+                });
             }
-            data = session.accept_data_stream() => {
-                match data {
-                    Ok((header, reader)) => {
-                        let state = state.clone();
-                        let sid = session_id;
-                        tokio::spawn(async move {
-                            if let Err(e) = handle_data_stream(sid, header, reader, state).await {
-                                eprintln!("data stream error: {e}");
-                            }
-                        });
+            SessionEvent::PublishNamespace(mut request) => {
+                tokio::spawn(async move {
+                    state
+                        .lock()
+                        .await
+                        .register_namespace(request.message.track_namespace.clone(), sid);
+                    if let Err(e) = request.accept().await {
+                        eprintln!("publish_namespace error: {e}");
                     }
-                    Err(_) => break,
-                }
+                });
+            }
+            SessionEvent::DataStream(header, reader) => {
+                tokio::spawn(async move {
+                    if let Err(e) = handle_data_stream(sid, header, reader, state).await {
+                        eprintln!("data stream error: {e}");
+                    }
+                });
             }
         }
     }
@@ -310,28 +315,6 @@ async fn handle_data_stream(
     Ok(())
 }
 
-/// Handle an incoming request event.
-async fn handle_request_event(
-    session_id: SessionId,
-    event: RequestEvent,
-    state: Arc<Mutex<RelayState>>,
-) -> Result<()> {
-    match event {
-        RequestEvent::PublishNamespace(mut request) => {
-            state
-                .lock()
-                .await
-                .register_namespace(request.message.track_namespace.clone(), session_id);
-            request.accept().await?;
-        }
-        RequestEvent::Subscribe(request) => {
-            handle_subscribe(session_id, request, state).await?;
-        }
-    }
-
-    Ok(())
-}
-
 /// Handle a SUBSCRIBE message.
 ///
 /// 1. Check subscription filter (only NextGroupStart supported)
@@ -361,27 +344,27 @@ async fn handle_subscribe(
         subscriber_request
             .lock()
             .await
-            .reject(ERROR_NOT_SUPPORTED, "only NextGroupStart filter is supported")
+            .reject(
+                ERROR_NOT_SUPPORTED,
+                "only NextGroupStart filter is supported",
+            )
             .await?;
         return Ok(());
     }
 
     // === Find publisher session ===
-    let (publisher_session_id, publisher_session) = match state
-        .lock()
-        .await
-        .find_publisher(&msg.track_namespace)
-    {
-        Some(found) => found,
-        None => {
-            subscriber_request
-                .lock()
-                .await
-                .reject(ERROR_DOES_NOT_EXIST, "no publisher for namespace")
-                .await?;
-            return Ok(());
-        }
-    };
+    let (publisher_session_id, publisher_session) =
+        match state.lock().await.find_publisher(&msg.track_namespace) {
+            Some(found) => found,
+            None => {
+                subscriber_request
+                    .lock()
+                    .await
+                    .reject(ERROR_DOES_NOT_EXIST, "no publisher for namespace")
+                    .await?;
+                return Ok(());
+            }
+        };
 
     // === Forward SUBSCRIBE to publisher via session API ===
     let track_name_str = std::str::from_utf8(&msg.track_name)?;

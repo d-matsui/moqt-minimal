@@ -20,12 +20,14 @@ use crate::session::request_stream::{RequestMessage, RequestStreamReader, Reques
 use crate::session::subscribe_request::SubscribeRequest;
 use crate::session::subscription::Subscription;
 
-/// An incoming request event from the peer.
-pub enum RequestEvent {
-    /// A SUBSCRIBE request was received.
+/// An event received on the session.
+pub enum SessionEvent {
+    /// A SUBSCRIBE request was received on a bidi stream.
     Subscribe(SubscribeRequest),
-    /// A PUBLISH_NAMESPACE request was received.
+    /// A PUBLISH_NAMESPACE request was received on a bidi stream.
     PublishNamespace(PublishNamespaceRequest),
+    /// A data stream was received on a uni stream.
+    DataStream(SubgroupHeader, DataStreamReader),
 }
 
 /// A MOQT session over a QUIC connection.
@@ -142,34 +144,36 @@ impl MoqtSession {
         }
     }
 
-    /// Wait for the next incoming request on a bidi stream.
-    /// Accepts a bidi stream, reads the first message, and returns
-    /// a typed RequestEvent.
-    pub async fn next_request(&self) -> Result<RequestEvent> {
-        let (send, recv) = self.connection.accept_bi().await?;
-        let writer = RequestStreamWriter::new(send);
-        let mut reader = RequestStreamReader::new(recv);
-        let msg = reader.read_message().await?;
-
-        match msg {
-            RequestMessage::Subscribe(sub) => {
-                Ok(RequestEvent::Subscribe(SubscribeRequest::new(sub, writer)))
+    /// Wait for the next event on this session.
+    /// Concurrently waits for a bidi request or a uni data stream.
+    /// Only `accept_bi()` / `accept_uni()` are inside the `select!`,
+    /// so cancellation of the losing branch is safe (no data consumed).
+    pub async fn next_event(&self) -> Result<SessionEvent> {
+        tokio::select! {
+            bi = self.connection.accept_bi() => {
+                let (send, recv) = bi?;
+                let writer = RequestStreamWriter::new(send);
+                let mut reader = RequestStreamReader::new(recv);
+                let msg = reader.read_message().await?;
+                match msg {
+                    RequestMessage::Subscribe(sub) => {
+                        Ok(SessionEvent::Subscribe(SubscribeRequest::new(sub, writer)))
+                    }
+                    RequestMessage::PublishNamespace(pub_ns) => {
+                        Ok(SessionEvent::PublishNamespace(
+                            PublishNamespaceRequest::new(pub_ns, writer),
+                        ))
+                    }
+                    _ => bail!("unexpected message on request stream"),
+                }
             }
-            RequestMessage::PublishNamespace(pub_ns) => Ok(RequestEvent::PublishNamespace(
-                PublishNamespaceRequest::new(pub_ns, writer),
-            )),
-            _ => bail!("unexpected message on request stream"),
+            uni = self.connection.accept_uni() => {
+                let recv = uni?;
+                let mut reader = DataStreamReader::new(recv);
+                let (header, _raw) = reader.read_subgroup_header().await?;
+                Ok(SessionEvent::DataStream(header, reader))
+            }
         }
-    }
-
-    /// Accept an incoming data stream (unidirectional).
-    /// Reads the SubgroupHeader and returns it along with a DataStreamReader
-    /// for reading subsequent Objects.
-    pub async fn accept_data_stream(&self) -> Result<(SubgroupHeader, DataStreamReader)> {
-        let recv = self.connection.accept_uni().await?;
-        let mut reader = DataStreamReader::new(recv);
-        let (header, _raw) = reader.read_subgroup_header().await?;
-        Ok((header, reader))
     }
 
     /// Open an outgoing data stream (unidirectional).

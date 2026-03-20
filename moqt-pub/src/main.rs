@@ -34,7 +34,7 @@ use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::DataStreamWriter;
-use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
+use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -84,8 +84,8 @@ async fn main() -> anyhow::Result<()> {
 
     // === Wait for SUBSCRIBE ===
     eprintln!("Waiting for SUBSCRIBE...");
-    let mut request = match session.next_request().await? {
-        RequestEvent::Subscribe(r) => r,
+    let mut request = match session.next_event().await? {
+        SessionEvent::Subscribe(r) => r,
         _ => anyhow::bail!("expected SUBSCRIBE"),
     };
     eprintln!(

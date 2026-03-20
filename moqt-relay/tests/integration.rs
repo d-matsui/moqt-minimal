@@ -17,7 +17,7 @@ use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
+use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 use moqt_core::quic_config;
 
 /// Helper: generate self-signed cert and return (cert_der, key_der)
@@ -147,9 +147,9 @@ async fn subscribe_via_relay() {
 
     // Publisher: spawn task to accept SUBSCRIBE and respond with SUBSCRIBE_OK
     tokio::spawn(async move {
-        let event = pub_session.next_request().await.unwrap();
+        let event = pub_session.next_event().await.unwrap();
         match event {
-            RequestEvent::Subscribe(mut req) => {
+            SessionEvent::Subscribe(mut req) => {
                 let ok = SubscribeOkMessage {
                     track_alias: 1,
                     parameters: vec![],
@@ -203,9 +203,9 @@ async fn object_forwarding() {
     let _pub_conn_keepalive = pub_session.connection().clone();
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let event = pub_session.next_request().await.unwrap();
+        let event = pub_session.next_event().await.unwrap();
         match event {
-            RequestEvent::Subscribe(mut req) => {
+            SessionEvent::Subscribe(mut req) => {
                 let ok = SubscribeOkMessage {
                     track_alias: 1,
                     parameters: vec![],
@@ -319,9 +319,9 @@ async fn publish_done_forwarding() {
     let _pub_conn_keepalive = pub_session.connection().clone();
     let pub_conn = pub_session.connection().clone();
     tokio::spawn(async move {
-        let event = pub_session.next_request().await.unwrap();
+        let event = pub_session.next_event().await.unwrap();
         match event {
-            RequestEvent::Subscribe(mut req) => {
+            SessionEvent::Subscribe(mut req) => {
                 let ok = SubscribeOkMessage {
                     track_alias: 1,
                     parameters: vec![],
@@ -400,9 +400,9 @@ async fn multiple_groups() {
     let _pub_conn_keepalive = pub_session.connection().clone();
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let event = pub_session.next_request().await.unwrap();
+        let event = pub_session.next_event().await.unwrap();
         match event {
-            RequestEvent::Subscribe(mut req) => {
+            SessionEvent::Subscribe(mut req) => {
                 let ok = SubscribeOkMessage {
                     track_alias: 1,
                     parameters: vec![],
@@ -534,9 +534,9 @@ async fn late_join() {
     let _pub_conn_keepalive = pub_session.connection().clone();
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let event = pub_session.next_request().await.unwrap();
+        let event = pub_session.next_event().await.unwrap();
         match event {
-            RequestEvent::Subscribe(mut req) => {
+            SessionEvent::Subscribe(mut req) => {
                 let ok = SubscribeOkMessage {
                     track_alias: 1,
                     parameters: vec![],
@@ -706,9 +706,9 @@ async fn multiple_subscribers() {
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         // Accept first SUBSCRIBE
-        let event1 = pub_session.next_request().await.unwrap();
+        let event1 = pub_session.next_event().await.unwrap();
         let mut req1 = match event1 {
-            RequestEvent::Subscribe(req) => req,
+            SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
         let ok = SubscribeOkMessage {
@@ -719,9 +719,9 @@ async fn multiple_subscribers() {
         req1.accept(&ok).await.unwrap();
 
         // Accept second SUBSCRIBE
-        let event2 = pub_session.next_request().await.unwrap();
+        let event2 = pub_session.next_event().await.unwrap();
         let mut req2 = match event2 {
-            RequestEvent::Subscribe(req) => req,
+            SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
         req2.accept(&ok).await.unwrap();
@@ -832,9 +832,9 @@ async fn multiple_tracks() {
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         // Accept SUBSCRIBE for video (alias=1)
-        let event_v = pub_session.next_request().await.unwrap();
+        let event_v = pub_session.next_event().await.unwrap();
         let mut req_v = match event_v {
-            RequestEvent::Subscribe(req) => req,
+            SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
         let ok_v = SubscribeOkMessage {
@@ -845,9 +845,9 @@ async fn multiple_tracks() {
         req_v.accept(&ok_v).await.unwrap();
 
         // Accept SUBSCRIBE for audio (alias=2)
-        let event_a = pub_session.next_request().await.unwrap();
+        let event_a = pub_session.next_event().await.unwrap();
         let mut req_a = match event_a {
-            RequestEvent::Subscribe(req) => req,
+            SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
         let ok_a = SubscribeOkMessage {
@@ -983,9 +983,9 @@ async fn subscriber_disconnect() {
     let _pub_conn_keepalive = pub_session.connection().clone();
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        let event = pub_session.next_request().await.unwrap();
+        let event = pub_session.next_event().await.unwrap();
         match event {
-            RequestEvent::Subscribe(mut req) => {
+            SessionEvent::Subscribe(mut req) => {
                 let ok = SubscribeOkMessage {
                     track_alias: 1,
                     parameters: vec![],
