@@ -12,4 +12,5 @@
 pub mod data;
 pub mod message;
 pub mod primitives;
+pub mod quic_config;
 pub mod session;

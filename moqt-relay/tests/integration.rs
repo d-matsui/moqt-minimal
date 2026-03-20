@@ -18,7 +18,7 @@ use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
-use moqt_core::session::quic_config;
+use moqt_core::quic_config;
 
 /// Helper: generate self-signed cert and return (cert_der, key_der)
 fn gen_cert() -> (

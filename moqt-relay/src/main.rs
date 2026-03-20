@@ -12,7 +12,7 @@ use moqt_relay::relay;
 
 use std::net::SocketAddr;
 
-use moqt_core::session::quic_config;
+use moqt_core::quic_config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
