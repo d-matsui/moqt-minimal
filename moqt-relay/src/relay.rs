@@ -7,10 +7,12 @@
 //! ```text
 //! Publisher ──QUIC conn──→ [Relay Server] ←──QUIC conn── Subscriber
 //!   │                              │                              │
-//!   ├─ SETUP exchange              │                SETUP exchange─┤
+//!   ├─ SETUP exchange              │               SETUP exchange─┤
 //!   ├─ PUBLISH_NAMESPACE register  │                              │
-//!   │                              ├─ SUBSCRIBE forward ─────────→│
-//!   │                 SUBSCRIBE_OK ←┤                              │
+//!   │                              │← SUBSCRIBE ──────────────────┤
+//!   │← SUBSCRIBE forward ──────────┤                              │
+//!   ├─ SUBSCRIBE_OK ──────────────→┤                              │
+//!   │                              ├─ SUBSCRIBE_OK forward ──────→│
 //!   ├─ Data stream (uni) ────────→├─ Data stream relay ──────────→│
 //!   └─ PUBLISH_DONE ─────────────→├─ PUBLISH_DONE forward ──────→│
 //! ```
