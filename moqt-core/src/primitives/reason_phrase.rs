@@ -23,6 +23,14 @@ pub struct ReasonPhrase {
     pub value: Vec<u8>,
 }
 
+impl From<&str> for ReasonPhrase {
+    fn from(s: &str) -> Self {
+        Self {
+            value: s.as_bytes().to_vec(),
+        }
+    }
+}
+
 /// Encode a ReasonPhrase into bytes.
 pub fn encode_reason_phrase(rp: &ReasonPhrase, buf: &mut Vec<u8>) {
     encode_varint(rp.value.len() as u64, buf);

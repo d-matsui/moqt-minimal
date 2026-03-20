@@ -69,13 +69,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // SUBSCRIBE
-    let ns = TrackNamespace {
-        fields: vec![namespace.as_bytes().to_vec()],
-    };
+    let ns = TrackNamespace::from(&[namespace] as &[&str]);
     let mut subscription = session
         .subscribe(
             ns,
-            track_name.as_bytes().to_vec(),
+            track_name,
             vec![MessageParameter::SubscriptionFilter(
                 SubscriptionFilter::NextGroupStart,
             )],

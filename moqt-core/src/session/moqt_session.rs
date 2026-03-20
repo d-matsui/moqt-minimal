@@ -113,7 +113,7 @@ impl MoqtSession {
     pub async fn subscribe(
         &self,
         namespace: TrackNamespace,
-        track_name: Vec<u8>,
+        track_name: &str,
         parameters: Vec<MessageParameter>,
     ) -> Result<Subscription> {
         let (send, recv) = self.connection.open_bi().await?;
@@ -124,7 +124,7 @@ impl MoqtSession {
             request_id: self.request_id_alloc.allocate(),
             required_request_id_delta: 0,
             track_namespace: namespace,
-            track_name,
+            track_name: track_name.as_bytes().to_vec(),
             parameters,
         };
         writer.write_subscribe(&msg).await?;

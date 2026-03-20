@@ -25,6 +25,14 @@ pub struct TrackNamespace {
     pub fields: Vec<Vec<u8>>,
 }
 
+impl From<&[&str]> for TrackNamespace {
+    fn from(fields: &[&str]) -> Self {
+        Self {
+            fields: fields.iter().map(|s| s.as_bytes().to_vec()).collect(),
+        }
+    }
+}
+
 /// Maximum number of fields per the spec. Limits DoS attack surface.
 const MAX_FIELDS: u64 = 32;
 

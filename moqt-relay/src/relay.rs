@@ -91,25 +91,21 @@ impl RelayState {
     }
 
     /// Find the publisher session for a namespace (prefix match).
+    /// Find the publisher session for a namespace (prefix match).
+    /// Tries progressively shorter prefixes of the given namespace
+    /// against the HashMap until a match is found.
     fn find_publisher(&self, namespace: &TrackNamespace) -> Option<(SessionId, Arc<MoqtSession>)> {
-        let pub_id = self
-            .namespace_to_publisher
-            .iter()
-            .find_map(|(registered_ns, sid)| {
-                if registered_ns.fields.len() <= namespace.fields.len()
-                    && registered_ns
-                        .fields
-                        .iter()
-                        .zip(namespace.fields.iter())
-                        .all(|(a, b)| a == b)
-                {
-                    Some(*sid)
-                } else {
-                    None
-                }
-            })?;
-        let session = self.sessions.get(&pub_id)?.clone();
-        Some((pub_id, session))
+        let mut prefix = namespace.clone();
+        loop {
+            if let Some(&pub_id) = self.namespace_to_publisher.get(&prefix) {
+                let session = self.sessions.get(&pub_id)?.clone();
+                return Some((pub_id, session));
+            }
+            if prefix.fields.is_empty() {
+                return None;
+            }
+            prefix.fields.pop();
+        }
     }
 
     /// Add a subscription entry.
@@ -382,9 +378,7 @@ async fn handle_subscribe(
         let err = RequestErrorMessage {
             error_code: 0x3, // NOT_SUPPORTED
             retry_interval: 0,
-            reason_phrase: ReasonPhrase {
-                value: b"only NextGroupStart filter is supported".to_vec(),
-            },
+            reason_phrase: ReasonPhrase::from("only NextGroupStart filter is supported"),
         };
         subscriber_request.lock().await.reject(&err).await?;
         return Ok(());
@@ -401,9 +395,7 @@ async fn handle_subscribe(
             let err = RequestErrorMessage {
                 error_code: 0x10, // DOES_NOT_EXIST
                 retry_interval: 0,
-                reason_phrase: ReasonPhrase {
-                    value: b"no publisher for namespace".to_vec(),
-                },
+                reason_phrase: ReasonPhrase::from("no publisher for namespace"),
             };
             subscriber_request.lock().await.reject(&err).await?;
             return Ok(());
@@ -411,10 +403,11 @@ async fn handle_subscribe(
     };
 
     // === Forward SUBSCRIBE to publisher via session API ===
+    let track_name_str = std::str::from_utf8(&msg.track_name)?;
     let mut subscription = publisher_session
         .subscribe(
             msg.track_namespace.clone(),
-            msg.track_name.clone(),
+            track_name_str,
             msg.parameters.clone(),
         )
         .await?;

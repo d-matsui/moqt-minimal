@@ -79,9 +79,7 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("SETUP exchange complete.");
 
     // === PUBLISH_NAMESPACE ===
-    let ns = TrackNamespace {
-        fields: vec![namespace.as_bytes().to_vec()],
-    };
+    let ns = TrackNamespace::from(&[namespace] as &[&str]);
     session.publish_namespace(ns.clone()).await?;
     eprintln!("PUBLISH_NAMESPACE registered.");
 
@@ -114,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
         let done = PublishDoneMessage {
             status_code: 0x2, // TRACK_ENDED
             stream_count,
-            reason_phrase: ReasonPhrase { value: vec![] },
+            reason_phrase: ReasonPhrase::from(""),
         };
         request.send_publish_done(&done).await?;
         // Wait for data to be flushed before closing the connection
@@ -152,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
         let done = PublishDoneMessage {
             status_code: 0x2, // TRACK_ENDED
             stream_count: 5,
-            reason_phrase: ReasonPhrase { value: vec![] },
+            reason_phrase: ReasonPhrase::from(""),
         };
         request.send_publish_done(&done).await?;
         eprintln!("Sent PUBLISH_DONE. Exiting.");

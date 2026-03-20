@@ -115,9 +115,7 @@ async fn publish_namespace_registration() {
     // Send PUBLISH_NAMESPACE
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
     // If we get here, registration succeeded
@@ -140,9 +138,7 @@ async fn subscribe_via_relay() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -169,10 +165,8 @@ async fn subscribe_via_relay() {
     let sub_session = connect_client(addr, cert_der).await;
     let subscription = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
             vec![MessageParameter::SubscriptionFilter(
                 SubscriptionFilter::NextGroupStart,
             )],
@@ -199,9 +193,7 @@ async fn object_forwarding() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -260,10 +252,8 @@ async fn object_forwarding() {
     let sub_conn = sub_session.connection().clone();
     let _subscription = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
             vec![],
         )
         .await
@@ -321,9 +311,7 @@ async fn publish_done_forwarding() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -366,9 +354,7 @@ async fn publish_done_forwarding() {
                 let done = PublishDoneMessage {
                     status_code: 0x2, // TRACK_ENDED
                     stream_count: 1,
-                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase {
-                        value: vec![],
-                    },
+                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
                 };
                 req.send_publish_done(&done).await.unwrap();
             }
@@ -380,10 +366,8 @@ async fn publish_done_forwarding() {
     let sub_session = connect_client(addr, cert_der).await;
     let mut subscription = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
             vec![],
         )
         .await
@@ -408,9 +392,7 @@ async fn multiple_groups() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -458,9 +440,7 @@ async fn multiple_groups() {
                 let done = PublishDoneMessage {
                     status_code: 0x2,
                     stream_count: 3,
-                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase {
-                        value: vec![],
-                    },
+                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
                 };
                 req.send_publish_done(&done).await.unwrap();
             }
@@ -473,10 +453,8 @@ async fn multiple_groups() {
     let sub_conn = sub_session.connection().clone();
     let mut subscription = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
             vec![],
         )
         .await
@@ -548,9 +526,7 @@ async fn late_join() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -597,9 +573,7 @@ async fn late_join() {
                 let done = PublishDoneMessage {
                     status_code: 0x2,
                     stream_count: 2,
-                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase {
-                        value: vec![],
-                    },
+                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
                 };
                 req.send_publish_done(&done).await.unwrap();
             }
@@ -614,10 +588,8 @@ async fn late_join() {
     let sub_conn = sub_session.connection().clone();
     let _subscription = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
             vec![MessageParameter::SubscriptionFilter(
                 SubscriptionFilter::NextGroupStart,
             )],
@@ -694,10 +666,8 @@ async fn subscribe_unknown_namespace() {
     let sub_session = connect_client(addr, cert_der).await;
     let result = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"nonexistent".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["nonexistent"].as_slice()),
+            "video",
             vec![],
         )
         .await;
@@ -727,9 +697,7 @@ async fn multiple_subscribers() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -786,7 +754,7 @@ async fn multiple_subscribers() {
         let done = PublishDoneMessage {
             status_code: 0x2,
             stream_count: 1,
-            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
         };
         req1.send_publish_done(&done).await.unwrap();
         req2.send_publish_done(&done).await.unwrap();
@@ -801,10 +769,8 @@ async fn multiple_subscribers() {
         let conn = session.connection().clone();
         let _subscription = session
             .subscribe(
-                TrackNamespace {
-                    fields: vec![b"example".to_vec()],
-                },
-                b"video".to_vec(),
+                TrackNamespace::from(["example"].as_slice()),
+                "video",
                 vec![],
             )
             .await
@@ -857,9 +823,7 @@ async fn multiple_tracks() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -941,7 +905,7 @@ async fn multiple_tracks() {
         let done = PublishDoneMessage {
             status_code: 0x2,
             stream_count: 1,
-            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase { value: vec![] },
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
         };
         req_v.send_publish_done(&done).await.unwrap();
         req_a.send_publish_done(&done).await.unwrap();
@@ -954,10 +918,8 @@ async fn multiple_tracks() {
     // Subscribe to video
     let _sub_v = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"video".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
             vec![],
         )
         .await
@@ -966,10 +928,8 @@ async fn multiple_tracks() {
     // Subscribe to audio
     let _sub_a = sub_session
         .subscribe(
-            TrackNamespace {
-                fields: vec![b"example".to_vec()],
-            },
-            b"audio".to_vec(),
+            TrackNamespace::from(["example"].as_slice()),
+            "audio",
             vec![],
         )
         .await
@@ -1015,9 +975,7 @@ async fn subscriber_disconnect() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
         &pub_session,
-        TrackNamespace {
-            fields: vec![b"example".to_vec()],
-        },
+        TrackNamespace::from(["example"].as_slice()),
     )
     .await;
 
@@ -1075,10 +1033,8 @@ async fn subscriber_disconnect() {
         let sub_conn = sub_session.connection().clone();
         let _subscription = sub_session
             .subscribe(
-                TrackNamespace {
-                    fields: vec![b"example".to_vec()],
-                },
-                b"video".to_vec(),
+                TrackNamespace::from(["example"].as_slice()),
+                "video",
                 vec![],
             )
             .await
