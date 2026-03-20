@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use moqt_core::data::object::ObjectHeader;
 use moqt_core::data::subgroup_header::SubgroupHeader;
-use moqt_core::message::publish_done::PublishDoneMessage;
+use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
@@ -74,8 +74,7 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Connected.");
 
     // === SETUP exchange ===
-    let session = MoqtSession::connect(connection.clone()).await?;
-    let connection = session.connection().clone();
+    let session = MoqtSession::connect(connection).await?;
     eprintln!("SETUP exchange complete.");
 
     // === PUBLISH_NAMESPACE ===
@@ -105,12 +104,11 @@ async fn main() -> anyhow::Result<()> {
 
     if pipe_mode {
         // === Pipe mode: read IVF video from stdin and publish ===
-        let conn = connection.clone();
-        let stream_count = send_from_stdin(conn, track_name).await?;
+        let stream_count = send_from_stdin(&session, track_name).await?;
 
         // Send PUBLISH_DONE
         let done = PublishDoneMessage {
-            status_code: 0x2, // TRACK_ENDED
+            status_code: STATUS_TRACK_ENDED,
             stream_count,
             reason_phrase: ReasonPhrase::from(""),
         };
@@ -121,8 +119,6 @@ async fn main() -> anyhow::Result<()> {
     } else {
         // === Demo mode: send dummy data ===
         for group_id in 0u64..5 {
-            let uni = connection.open_uni().await?;
-            let mut data_writer = DataStreamWriter::new(uni);
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
@@ -131,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
                 subgroup_id: None,
                 publisher_priority: None,
             };
-            data_writer.write_subgroup_header(&header).await?;
+            let mut data_writer = session.open_data_stream(&header).await?;
 
             for obj_id in 0u64..3 {
                 let payload = format!("g{group_id}o{obj_id}");
@@ -148,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         let done = PublishDoneMessage {
-            status_code: 0x2, // TRACK_ENDED
+            status_code: STATUS_TRACK_ENDED,
             stream_count: 5,
             reason_phrase: ReasonPhrase::from(""),
         };
@@ -180,7 +176,7 @@ struct IvfFrame {
 /// ## Mapping to MOQT
 /// - Keyframe -> new Group (FIN the previous Group's stream and open a new one)
 /// - Each frame -> one Object (sequential Object IDs with delta=0)
-async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::Result<u64> {
+async fn send_from_stdin(session: &MoqtSession, _track_name: &str) -> anyhow::Result<u64> {
     // Bridge blocking I/O (stdin reading) and async I/O (QUIC sending) via a channel.
     // Use spawn_blocking for blocking reads, and receive frames asynchronously
     // in the main task for sending.
@@ -254,8 +250,6 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
 
         // Open a new data stream if needed
         if current_writer.is_none() {
-            let uni = conn.open_uni().await?;
-            let mut writer = DataStreamWriter::new(uni);
             let header = SubgroupHeader {
                 track_alias: 1,
                 group_id,
@@ -264,8 +258,7 @@ async fn send_from_stdin(conn: quinn::Connection, _track_name: &str) -> anyhow::
                 subgroup_id: None,
                 publisher_priority: None,
             };
-            writer.write_subgroup_header(&header).await?;
-            current_writer = Some(writer);
+            current_writer = Some(session.open_data_stream(&header).await?);
             group_started = true;
         }
 

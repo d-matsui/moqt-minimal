@@ -7,6 +7,11 @@
 //! - `0x00`: INTERNAL_ERROR
 //! - `0x10`: DOES_NOT_EXIST
 
+/// The request is not supported by the peer.
+pub const ERROR_NOT_SUPPORTED: u64 = 0x3;
+/// The track or namespace does not exist.
+pub const ERROR_DOES_NOT_EXIST: u64 = 0x10;
+
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_ERROR, decode_message, encode_message};

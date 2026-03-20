@@ -43,10 +43,12 @@ use tokio::sync::Mutex;
 
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::request_error::RequestErrorMessage;
+use moqt_core::message::request_error::{
+    RequestErrorMessage, ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED,
+};
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
+use moqt_core::session::data_stream::DataStreamReader;
 use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
 use moqt_core::session::subscribe_request::SubscribeRequest;
 
@@ -113,23 +115,19 @@ impl RelayState {
         self.subscriptions.push(entry);
     }
 
-    /// Find subscriber connections for a given publisher's data stream.
-    fn find_subscriber_connections(
+    /// Find subscriber sessions for a given publisher's data stream.
+    fn find_subscriber_sessions(
         &self,
         publisher_session: SessionId,
         track_alias: u64,
-    ) -> Vec<quinn::Connection> {
+    ) -> Vec<Arc<MoqtSession>> {
         self.subscriptions
             .iter()
             .filter(|sub| {
                 sub.publisher_session == publisher_session
                     && sub.publisher_track_alias == track_alias
             })
-            .filter_map(|sub| {
-                self.sessions
-                    .get(&sub.subscriber_session)
-                    .map(|sess| sess.connection().clone())
-            })
+            .filter_map(|sub| self.sessions.get(&sub.subscriber_session).cloned())
             .collect()
     }
 
@@ -270,38 +268,26 @@ async fn handle_data_stream(
     // === Identify subscribers and open downstream streams ===
     // Find matching subscriptions by Track Alias and sender session,
     // then open uni streams to each subscriber
-    let subscriber_writers: Vec<DataStreamWriter> = {
-        let sub_conns = state
-            .lock()
-            .await
-            .find_subscriber_connections(sender_session, track_alias);
-
-        let mut writers = Vec::new();
-        for conn in sub_conns {
-            match conn.open_uni().await {
-                Ok(stream) => writers.push(DataStreamWriter::new(stream)),
-                Err(e) => eprintln!("failed to open uni to subscriber: {e}"),
-            }
-        }
-        writers
-    };
+    let sub_sessions = state
+        .lock()
+        .await
+        .find_subscriber_sessions(sender_session, track_alias);
 
     // If there are no subscribers, drain the stream
-    if subscriber_writers.is_empty() {
+    if sub_sessions.is_empty() {
         while let Ok(Some(_)) = data_reader.read_object().await {}
         return Ok(());
     }
 
-    // === Forward SubgroupHeader ===
-    // Re-encode the header and write to subscribers
-    let subscriber_writers: Vec<Arc<Mutex<DataStreamWriter>>> = subscriber_writers
-        .into_iter()
-        .map(|w| Arc::new(Mutex::new(w)))
-        .collect();
-
-    for writer in &subscriber_writers {
-        writer.lock().await.write_subgroup_header(&header).await?;
+    // === Open data streams to subscribers (writes SubgroupHeader) ===
+    let mut writers = Vec::new();
+    for session in &sub_sessions {
+        match session.open_data_stream(&header).await {
+            Ok(w) => writers.push(Arc::new(Mutex::new(w))),
+            Err(e) => eprintln!("failed to open data stream to subscriber: {e}"),
+        }
     }
+    let subscriber_writers = writers;
 
     // === Relay objects incrementally ===
     // Read objects one by one and immediately forward to all subscribers.
@@ -376,7 +362,7 @@ async fn handle_subscribe(
     });
     if has_unsupported_filter {
         let err = RequestErrorMessage {
-            error_code: 0x3, // NOT_SUPPORTED
+            error_code: ERROR_NOT_SUPPORTED,
             retry_interval: 0,
             reason_phrase: ReasonPhrase::from("only NextGroupStart filter is supported"),
         };
@@ -393,7 +379,7 @@ async fn handle_subscribe(
         Some(found) => found,
         None => {
             let err = RequestErrorMessage {
-                error_code: 0x10, // DOES_NOT_EXIST
+                error_code: ERROR_DOES_NOT_EXIST,
                 retry_interval: 0,
                 reason_phrase: ReasonPhrase::from("no publisher for namespace"),
             };

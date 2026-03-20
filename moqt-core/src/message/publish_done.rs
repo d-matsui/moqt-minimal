@@ -8,6 +8,11 @@
 //! - `0x0`: INTERNAL_ERROR
 //! - `0x2`: TRACK_ENDED (normal termination)
 
+/// Normal termination: the track is no longer being published.
+pub const STATUS_TRACK_ENDED: u64 = 0x2;
+/// The publisher reached the end of an active subscription.
+pub const STATUS_SUBSCRIPTION_ENDED: u64 = 0x3;
+
 use anyhow::{Result, ensure};
 
 use super::{MSG_PUBLISH_DONE, decode_message, encode_message};

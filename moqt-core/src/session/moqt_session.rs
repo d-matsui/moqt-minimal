@@ -13,7 +13,7 @@ use crate::message::setup::{SetupMessage, SetupOption};
 use crate::message::subscribe::SubscribeMessage;
 use crate::primitives::track_namespace::TrackNamespace;
 use crate::session::control_stream::{ControlStreamReader, ControlStreamWriter};
-use crate::session::data_stream::DataStreamReader;
+use crate::session::data_stream::{DataStreamReader, DataStreamWriter};
 use crate::session::publish_namespace_request::PublishNamespaceRequest;
 use crate::session::request_id::RequestIdAllocator;
 use crate::session::request_stream::{RequestMessage, RequestStreamReader, RequestStreamWriter};
@@ -172,8 +172,20 @@ impl MoqtSession {
         Ok((header, reader))
     }
 
+    /// Open an outgoing data stream (unidirectional).
+    /// Writes the SubgroupHeader and returns a DataStreamWriter
+    /// for writing subsequent Objects.
+    pub async fn open_data_stream(
+        &self,
+        header: &SubgroupHeader,
+    ) -> Result<DataStreamWriter> {
+        let uni = self.connection.open_uni().await?;
+        let mut writer = DataStreamWriter::new(uni);
+        writer.write_subgroup_header(header).await?;
+        Ok(writer)
+    }
+
     /// Get a reference to the underlying QUIC connection.
-    /// Used by relay/pub/sub for stream operations not yet abstracted.
     pub fn connection(&self) -> &Connection {
         &self.connection
     }

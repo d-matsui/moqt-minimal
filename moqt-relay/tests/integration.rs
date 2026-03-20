@@ -14,7 +14,7 @@ fn init_crypto() {
 }
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::publish_done::PublishDoneMessage;
+use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
@@ -352,7 +352,7 @@ async fn publish_done_forwarding() {
 
                 // Send PUBLISH_DONE on the bidi stream
                 let done = PublishDoneMessage {
-                    status_code: 0x2, // TRACK_ENDED
+                    status_code: STATUS_TRACK_ENDED,
                     stream_count: 1,
                     reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
                 };
@@ -438,7 +438,7 @@ async fn multiple_groups() {
 
                 // PUBLISH_DONE
                 let done = PublishDoneMessage {
-                    status_code: 0x2,
+                    status_code: STATUS_TRACK_ENDED,
                     stream_count: 3,
                     reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
                 };
@@ -571,7 +571,7 @@ async fn late_join() {
                 }
 
                 let done = PublishDoneMessage {
-                    status_code: 0x2,
+                    status_code: STATUS_TRACK_ENDED,
                     stream_count: 2,
                     reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
                 };
@@ -752,7 +752,7 @@ async fn multiple_subscribers() {
 
         // PUBLISH_DONE on both bidi streams
         let done = PublishDoneMessage {
-            status_code: 0x2,
+            status_code: STATUS_TRACK_ENDED,
             stream_count: 1,
             reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
         };
@@ -903,7 +903,7 @@ async fn multiple_tracks() {
 
         // PUBLISH_DONE on both
         let done = PublishDoneMessage {
-            status_code: 0x2,
+            status_code: STATUS_TRACK_ENDED,
             stream_count: 1,
             reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
         };
