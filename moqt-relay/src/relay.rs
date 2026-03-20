@@ -62,20 +62,98 @@ pub struct Relay {
 
 /// Shared relay state. Manages sessions, namespace registrations, and subscriptions.
 struct RelayState {
-    /// Next session ID to assign
     next_session_id: u64,
-    /// List of active sessions
-    sessions: HashMap<SessionId, SessionState>,
-    /// Namespace-to-publisher session ID mapping.
-    /// Used to forward subscriber SUBSCRIBE messages to the appropriate publisher.
+    sessions: HashMap<SessionId, Arc<MoqtSession>>,
     namespace_publishers: HashMap<TrackNamespace, SessionId>,
-    /// List of active subscriptions. Used to identify relay destinations for data streams.
     subscriptions: Vec<SubscriptionEntry>,
 }
 
-/// Per-session state. Holds a reference to the MOQT session.
-struct SessionState {
-    session: Arc<MoqtSession>,
+impl RelayState {
+    /// Register a new session and return its ID.
+    fn register_session(&mut self, session: Arc<MoqtSession>) -> SessionId {
+        let id = self.next_session_id;
+        self.next_session_id += 1;
+        self.sessions.insert(id, session);
+        id
+    }
+
+    /// Remove a session and all associated namespace registrations and subscriptions.
+    fn remove_session(&mut self, id: SessionId) {
+        self.sessions.remove(&id);
+        self.namespace_publishers.retain(|_, v| *v != id);
+        self.subscriptions
+            .retain(|sub| sub.subscriber_session != id && sub.publisher_session != id);
+    }
+
+    /// Register a namespace as published by the given session.
+    fn register_namespace(&mut self, namespace: TrackNamespace, session_id: SessionId) {
+        self.namespace_publishers.insert(namespace, session_id);
+    }
+
+    /// Find the publisher session for a namespace (prefix match).
+    fn find_publisher(&self, namespace: &TrackNamespace) -> Option<(SessionId, Arc<MoqtSession>)> {
+        let pub_id = self
+            .namespace_publishers
+            .iter()
+            .find_map(|(registered_ns, sid)| {
+                if registered_ns.fields.len() <= namespace.fields.len()
+                    && registered_ns
+                        .fields
+                        .iter()
+                        .zip(namespace.fields.iter())
+                        .all(|(a, b)| a == b)
+                {
+                    Some(*sid)
+                } else {
+                    None
+                }
+            })?;
+        let session = self.sessions.get(&pub_id)?.clone();
+        Some((pub_id, session))
+    }
+
+    /// Add a subscription entry.
+    fn add_subscription(&mut self, entry: SubscriptionEntry) {
+        self.subscriptions.push(entry);
+    }
+
+    /// Find subscriber connections for a given publisher's data stream.
+    fn find_subscriber_connections(
+        &self,
+        publisher_session: SessionId,
+        track_alias: u64,
+    ) -> Vec<quinn::Connection> {
+        self.subscriptions
+            .iter()
+            .filter(|sub| {
+                sub.publisher_session == publisher_session
+                    && sub.publisher_track_alias == track_alias
+            })
+            .filter_map(|sub| {
+                self.sessions
+                    .get(&sub.subscriber_session)
+                    .map(|sess| sess.connection().clone())
+            })
+            .collect()
+    }
+
+    /// Find subscriber request handles for a given track (for PUBLISH_DONE forwarding).
+    fn find_subscriber_requests(
+        &self,
+        publisher_session: SessionId,
+        namespace: &TrackNamespace,
+        track_name: &[u8],
+    ) -> Vec<Arc<Mutex<SubscribeRequest>>> {
+        self.subscriptions
+            .iter()
+            .filter(|sub| {
+                sub.publisher_session == publisher_session
+                    && sub.track_namespace == *namespace
+                    && sub.track_name == track_name
+            })
+            .map(|sub| sub.subscriber_bidi_send.clone())
+            .collect()
+    }
 }
 
 /// Subscription entry. Records the mapping between a subscriber and a publisher.
@@ -135,19 +213,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     // === SETUP exchange ===
     let session = Arc::new(MoqtSession::accept(connection).await?);
 
-    // Assign a session ID and register in the session list
-    let session_id = {
-        let mut s = state.lock().await;
-        let id = s.next_session_id;
-        s.next_session_id += 1;
-        s.sessions.insert(
-            id,
-            SessionState {
-                session: session.clone(),
-            },
-        );
-        id
-    };
+    let session_id = state.lock().await.register_session(session.clone());
 
     // === Main loop: process requests and data streams concurrently ===
     loop {
@@ -183,17 +249,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     }
 
     // === Cleanup on disconnect ===
-    // Remove all state associated with this session.
-    // Without removing namespace registrations and subscription entries,
-    // the relay would attempt to forward to disconnected sessions.
-    {
-        let mut s = state.lock().await;
-        s.sessions.remove(&session_id);
-        s.namespace_publishers.retain(|_, v| *v != session_id);
-        s.subscriptions.retain(|sub| {
-            sub.subscriber_session != session_id && sub.publisher_session != session_id
-        });
-    }
+    state.lock().await.remove_session(session_id);
 
     Ok(())
 }
@@ -219,21 +275,10 @@ async fn handle_data_stream(
     // Find matching subscriptions by Track Alias and sender session,
     // then open uni streams to each subscriber
     let subscriber_writers: Vec<DataStreamWriter> = {
-        let s = state.lock().await;
-        let sub_conns: Vec<quinn::Connection> = s
-            .subscriptions
-            .iter()
-            .filter(|sub| {
-                sub.publisher_session == sender_session && sub.publisher_track_alias == track_alias
-            })
-            .filter_map(|sub| {
-                s.sessions
-                    .get(&sub.subscriber_session)
-                    .map(|sess| sess.session.connection().clone())
-            })
-            .collect();
-        // Release the lock before opening streams (since it involves await)
-        drop(s);
+        let sub_conns = state
+            .lock()
+            .await
+            .find_subscriber_connections(sender_session, track_alias);
 
         let mut writers = Vec::new();
         for conn in sub_conns {
@@ -294,11 +339,10 @@ async fn handle_request_event(
 ) -> Result<()> {
     match event {
         RequestEvent::PublishNamespace(mut request) => {
-            {
-                let mut s = state.lock().await;
-                s.namespace_publishers
-                    .insert(request.message.track_namespace.clone(), session_id);
-            }
+            state
+                .lock()
+                .await
+                .register_namespace(request.message.track_namespace.clone(), session_id);
             request.accept().await?;
         }
         RequestEvent::Subscribe(request) => {
@@ -347,47 +391,22 @@ async fn handle_subscribe(
     }
 
     // === Find publisher session ===
-    // Prefix-match: registered ["example"] matches subscribe ["example", "live"].
-    let (publisher_session_id, publisher_session) = {
-        let s = state.lock().await;
-        let ns = &msg.track_namespace;
-        let pub_id = s
-            .namespace_publishers
-            .iter()
-            .find_map(|(registered_ns, sid)| {
-                if registered_ns.fields.len() <= ns.fields.len()
-                    && registered_ns
-                        .fields
-                        .iter()
-                        .zip(ns.fields.iter())
-                        .all(|(a, b)| a == b)
-                {
-                    Some(*sid)
-                } else {
-                    None
-                }
-            });
-        match pub_id {
-            Some(id) => {
-                let session = s
-                    .sessions
-                    .get(&id)
-                    .ok_or_else(|| anyhow::anyhow!("publisher session gone"))?
-                    .session
-                    .clone();
-                (id, session)
-            }
-            None => {
-                let err = RequestErrorMessage {
-                    error_code: 0x10, // DOES_NOT_EXIST
-                    retry_interval: 0,
-                    reason_phrase: ReasonPhrase {
-                        value: b"no publisher for namespace".to_vec(),
-                    },
-                };
-                subscriber_request.lock().await.reject(&err).await?;
-                return Ok(());
-            }
+    let (publisher_session_id, publisher_session) = match state
+        .lock()
+        .await
+        .find_publisher(&msg.track_namespace)
+    {
+        Some(found) => found,
+        None => {
+            let err = RequestErrorMessage {
+                error_code: 0x10, // DOES_NOT_EXIST
+                retry_interval: 0,
+                reason_phrase: ReasonPhrase {
+                    value: b"no publisher for namespace".to_vec(),
+                },
+            };
+            subscriber_request.lock().await.reject(&err).await?;
+            return Ok(());
         }
     };
 
@@ -403,18 +422,15 @@ async fn handle_subscribe(
     let track_alias = subscription.track_alias();
 
     // === Record subscription entry ===
-    {
-        let mut s = state.lock().await;
-        s.subscriptions.push(SubscriptionEntry {
-            subscriber_session,
-            publisher_session: publisher_session_id,
-            track_namespace: msg.track_namespace.clone(),
-            track_name: msg.track_name.clone(),
-            publisher_track_alias: track_alias,
-            subscriber_track_alias: track_alias,
-            subscriber_bidi_send: subscriber_request.clone(),
-        });
-    }
+    state.lock().await.add_subscription(SubscriptionEntry {
+        subscriber_session,
+        publisher_session: publisher_session_id,
+        track_namespace: msg.track_namespace.clone(),
+        track_name: msg.track_name.clone(),
+        publisher_track_alias: track_alias,
+        subscriber_track_alias: track_alias,
+        subscriber_bidi_send: subscriber_request.clone(),
+    });
 
     // Forward SUBSCRIBE_OK to subscriber
     subscriber_request
@@ -426,18 +442,11 @@ async fn handle_subscribe(
     // === Wait for PUBLISH_DONE and forward ===
     let publish_done = subscription.recv_publish_done().await?;
 
-    let subs_to_notify: Vec<Arc<Mutex<SubscribeRequest>>> = {
-        let s = state.lock().await;
-        s.subscriptions
-            .iter()
-            .filter(|sub| {
-                sub.publisher_session == publisher_session_id
-                    && sub.track_namespace == msg.track_namespace
-                    && sub.track_name == msg.track_name
-            })
-            .map(|sub| sub.subscriber_bidi_send.clone())
-            .collect()
-    };
+    let subs_to_notify = state.lock().await.find_subscriber_requests(
+        publisher_session_id,
+        &msg.track_namespace,
+        &msg.track_name,
+    );
 
     for req in subs_to_notify {
         let _ = req.lock().await.send_publish_done(&publish_done).await;
