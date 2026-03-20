@@ -214,11 +214,10 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
         };
 
         let state = state.clone();
-        let sid = session_id;
         match event {
             SessionEvent::Subscribe(request) => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_subscribe(sid, request, state).await {
+                    if let Err(e) = handle_subscribe(session_id, request, state).await {
                         eprintln!("subscribe error: {e}");
                     }
                 });
@@ -228,7 +227,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
                     state
                         .lock()
                         .await
-                        .register_namespace(request.message.track_namespace.clone(), sid);
+                        .register_namespace(request.message.track_namespace.clone(), session_id);
                     if let Err(e) = request.accept().await {
                         eprintln!("publish_namespace error: {e}");
                     }
@@ -236,7 +235,7 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
             }
             SessionEvent::DataStream(header, reader) => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_data_stream(sid, header, reader, state).await {
+                    if let Err(e) = handle_data_stream(session_id, header, reader, state).await {
                         eprintln!("data stream error: {e}");
                     }
                 });
