@@ -43,10 +43,7 @@ use tokio::sync::Mutex;
 
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::request_error::{
-    RequestErrorMessage, ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED,
-};
-use moqt_core::primitives::reason_phrase::ReasonPhrase;
+use moqt_core::message::request_error::{ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED};
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::DataStreamReader;
 use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
@@ -361,12 +358,11 @@ async fn handle_subscribe(
         )
     });
     if has_unsupported_filter {
-        let err = RequestErrorMessage {
-            error_code: ERROR_NOT_SUPPORTED,
-            retry_interval: 0,
-            reason_phrase: ReasonPhrase::from("only NextGroupStart filter is supported"),
-        };
-        subscriber_request.lock().await.reject(&err).await?;
+        subscriber_request
+            .lock()
+            .await
+            .reject(ERROR_NOT_SUPPORTED, "only NextGroupStart filter is supported")
+            .await?;
         return Ok(());
     }
 
@@ -378,12 +374,11 @@ async fn handle_subscribe(
     {
         Some(found) => found,
         None => {
-            let err = RequestErrorMessage {
-                error_code: ERROR_DOES_NOT_EXIST,
-                retry_interval: 0,
-                reason_phrase: ReasonPhrase::from("no publisher for namespace"),
-            };
-            subscriber_request.lock().await.reject(&err).await?;
+            subscriber_request
+                .lock()
+                .await
+                .reject(ERROR_DOES_NOT_EXIST, "no publisher for namespace")
+                .await?;
             return Ok(());
         }
     };

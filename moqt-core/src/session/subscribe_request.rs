@@ -10,6 +10,7 @@ use crate::message::publish_done::PublishDoneMessage;
 use crate::message::request_error::RequestErrorMessage;
 use crate::message::subscribe::SubscribeMessage;
 use crate::message::subscribe_ok::SubscribeOkMessage;
+use crate::primitives::reason_phrase::ReasonPhrase;
 use crate::session::request_stream::RequestStreamWriter;
 
 /// An incoming SUBSCRIBE request that has not yet been responded to.
@@ -30,8 +31,13 @@ impl SubscribeRequest {
     }
 
     /// Reject the subscription by sending REQUEST_ERROR.
-    pub async fn reject(&mut self, err: &RequestErrorMessage) -> Result<()> {
-        self.writer.write_request_error(err).await
+    pub async fn reject(&mut self, error_code: u64, reason: &str) -> Result<()> {
+        let err = RequestErrorMessage {
+            error_code,
+            retry_interval: 0,
+            reason_phrase: ReasonPhrase::from(reason),
+        };
+        self.writer.write_request_error(&err).await
     }
 
     /// Send PUBLISH_DONE to signal end of publishing for this subscription.
