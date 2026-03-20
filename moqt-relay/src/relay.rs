@@ -44,6 +44,7 @@ use tokio::sync::Mutex;
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::request_error::{ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED};
+use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::DataStreamReader;
 use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
@@ -59,12 +60,39 @@ pub struct Relay {
     state: Arc<Mutex<RelayState>>,
 }
 
+/// A full track name that uniquely identifies a track (namespace + track name).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FullTrackName {
+    namespace: TrackNamespace,
+    name: String,
+}
+
+/// An active subscription for a track, from one publisher to one or more subscribers.
+struct Subscription {
+    /// Session ID of the publisher delivering data
+    publisher_session: SessionId,
+    /// Track alias assigned by the publisher (used in SubgroupHeader)
+    publisher_track_alias: u64,
+    /// The SUBSCRIBE_OK received from the publisher.
+    /// Reused for subscription aggregation.
+    subscribe_ok: SubscribeOkMessage,
+    /// List of subscribers receiving data for this track
+    subscribers: Vec<SubscriberEntry>,
+}
+
+/// A subscriber within a subscription.
+struct SubscriberEntry {
+    session_id: SessionId,
+    /// Request handle for sending PUBLISH_DONE
+    request: Arc<Mutex<SubscribeRequest>>,
+}
+
 /// Shared relay state. Manages sessions, namespace registrations, and subscriptions.
 struct RelayState {
     next_session_id: u64,
     sessions: HashMap<SessionId, Arc<MoqtSession>>,
     namespace_to_publisher: HashMap<TrackNamespace, SessionId>,
-    subscriptions: Vec<SubscriptionEntry>,
+    subscriptions: HashMap<FullTrackName, Subscription>,
 }
 
 impl RelayState {
@@ -80,8 +108,15 @@ impl RelayState {
     fn remove_session(&mut self, id: SessionId) {
         self.sessions.remove(&id);
         self.namespace_to_publisher.retain(|_, v| *v != id);
-        self.subscriptions
-            .retain(|sub| sub.subscriber_session != id && sub.publisher_session != id);
+        // Remove subscriber entries; drop entire subscription if publisher disconnects
+        // or no subscribers remain.
+        self.subscriptions.retain(|_, sub| {
+            if sub.publisher_session == id {
+                return false;
+            }
+            sub.subscribers.retain(|s| s.session_id != id);
+            !sub.subscribers.is_empty()
+        });
     }
 
     /// Register a namespace as published by the given session.
@@ -89,7 +124,6 @@ impl RelayState {
         self.namespace_to_publisher.insert(namespace, session_id);
     }
 
-    /// Find the publisher session for a namespace (prefix match).
     /// Find the publisher session for a namespace (prefix match).
     /// Tries progressively shorter prefixes of the given namespace
     /// against the HashMap until a match is found.
@@ -107,9 +141,22 @@ impl RelayState {
         }
     }
 
-    /// Add a subscription entry.
-    fn add_subscription(&mut self, entry: SubscriptionEntry) {
-        self.subscriptions.push(entry);
+    /// Add a subscriber to an existing subscription, or create a new one.
+    fn add_subscriber(
+        &mut self,
+        track: FullTrackName,
+        publisher_session: SessionId,
+        publisher_track_alias: u64,
+        subscribe_ok: SubscribeOkMessage,
+        subscriber: SubscriberEntry,
+    ) {
+        let sub = self.subscriptions.entry(track).or_insert_with(|| Subscription {
+            publisher_session,
+            publisher_track_alias,
+            subscribe_ok,
+            subscribers: Vec::new(),
+        });
+        sub.subscribers.push(subscriber);
     }
 
     /// Find subscriber sessions for a given publisher's data stream.
@@ -119,53 +166,31 @@ impl RelayState {
         track_alias: u64,
     ) -> Vec<Arc<MoqtSession>> {
         self.subscriptions
-            .iter()
+            .values()
             .filter(|sub| {
                 sub.publisher_session == publisher_session
                     && sub.publisher_track_alias == track_alias
             })
-            .filter_map(|sub| self.sessions.get(&sub.subscriber_session).cloned())
+            .flat_map(|sub| &sub.subscribers)
+            .filter_map(|s| self.sessions.get(&s.session_id).cloned())
             .collect()
+    }
+
+    /// Find an existing subscription for the same track (for aggregation).
+    fn find_existing_subscription(&self, track: &FullTrackName) -> Option<&Subscription> {
+        self.subscriptions.get(track)
     }
 
     /// Find subscriber request handles for a given track (for PUBLISH_DONE forwarding).
     fn find_subscriber_requests(
         &self,
-        publisher_session: SessionId,
-        namespace: &TrackNamespace,
-        track_name: &[u8],
+        track: &FullTrackName,
     ) -> Vec<Arc<Mutex<SubscribeRequest>>> {
         self.subscriptions
-            .iter()
-            .filter(|sub| {
-                sub.publisher_session == publisher_session
-                    && sub.track_namespace == *namespace
-                    && sub.track_name == track_name
-            })
-            .map(|sub| sub.subscriber_bidi_send.clone())
-            .collect()
+            .get(track)
+            .map(|sub| sub.subscribers.iter().map(|s| s.request.clone()).collect())
+            .unwrap_or_default()
     }
-}
-
-/// Subscription entry. Records the mapping between a subscriber and a publisher.
-struct SubscriptionEntry {
-    /// Session ID of the subscriber that requested the subscription
-    subscriber_session: SessionId,
-    /// Session ID of the publisher delivering data
-    publisher_session: SessionId,
-    /// Track namespace of the subscription
-    track_namespace: TrackNamespace,
-    /// Track name of the subscription
-    track_name: Vec<u8>,
-    /// Track alias assigned by the publisher.
-    /// Included in the SubgroupHeader of data streams,
-    /// so this value identifies which subscription the data belongs to.
-    publisher_track_alias: u64,
-    #[allow(dead_code)]
-    subscriber_track_alias: u64,
-    /// Subscriber's request handle.
-    /// Used to forward PUBLISH_DONE.
-    subscriber_bidi_send: Arc<Mutex<SubscribeRequest>>,
 }
 
 impl Relay {
@@ -176,7 +201,7 @@ impl Relay {
                 next_session_id: 0,
                 sessions: HashMap::new(),
                 namespace_to_publisher: HashMap::new(),
-                subscriptions: Vec::new(),
+                subscriptions: HashMap::new(),
             })),
         }
     }
@@ -351,6 +376,31 @@ async fn handle_subscribe(
         return Ok(());
     }
 
+    let track_name_str = std::str::from_utf8(&msg.track_name)?;
+    let track = FullTrackName {
+        namespace: msg.track_namespace.clone(),
+        name: track_name_str.to_string(),
+    };
+
+    let new_subscriber = SubscriberEntry {
+        session_id: subscriber_session,
+        request: subscriber_request.clone(),
+    };
+
+    // === Subscription aggregation ===
+    // If there is already an upstream subscription for the same track,
+    // reuse it instead of sending a new SUBSCRIBE to the publisher.
+    {
+        let mut s = state.lock().await;
+        if let Some(existing) = s.find_existing_subscription(&track) {
+            let ok = existing.subscribe_ok.clone();
+            s.subscriptions.get_mut(&track).unwrap().subscribers.push(new_subscriber);
+            drop(s);
+            subscriber_request.lock().await.accept(&ok).await?;
+            return Ok(());
+        }
+    }
+
     // === Find publisher session ===
     let (publisher_session_id, publisher_session) =
         match state.lock().await.find_publisher(&msg.track_namespace) {
@@ -366,10 +416,6 @@ async fn handle_subscribe(
         };
 
     // === Forward SUBSCRIBE to publisher via session API ===
-    // NOTE: No subscription aggregation — each subscriber triggers a new
-    // SUBSCRIBE to the publisher, even if another subscriber already
-    // subscribed to the same track.
-    let track_name_str = std::str::from_utf8(&msg.track_name)?;
     let mut subscription = publisher_session
         .subscribe(
             msg.track_namespace.clone(),
@@ -380,16 +426,14 @@ async fn handle_subscribe(
 
     let track_alias = subscription.track_alias();
 
-    // === Record subscription entry ===
-    state.lock().await.add_subscription(SubscriptionEntry {
-        subscriber_session,
-        publisher_session: publisher_session_id,
-        track_namespace: msg.track_namespace.clone(),
-        track_name: msg.track_name.clone(),
-        publisher_track_alias: track_alias,
-        subscriber_track_alias: track_alias,
-        subscriber_bidi_send: subscriber_request.clone(),
-    });
+    // === Record subscription ===
+    state.lock().await.add_subscriber(
+        track.clone(),
+        publisher_session_id,
+        track_alias,
+        subscription.subscribe_ok.clone(),
+        new_subscriber,
+    );
 
     // Forward SUBSCRIBE_OK to subscriber
     subscriber_request
@@ -401,11 +445,7 @@ async fn handle_subscribe(
     // === Wait for PUBLISH_DONE and forward ===
     let publish_done = subscription.recv_publish_done().await?;
 
-    let subs_to_notify = state.lock().await.find_subscriber_requests(
-        publisher_session_id,
-        &msg.track_namespace,
-        &msg.track_name,
-    );
+    let subs_to_notify = state.lock().await.find_subscriber_requests(&track);
 
     for req in subs_to_notify {
         let _ = req.lock().await.send_publish_done(&publish_done).await;
