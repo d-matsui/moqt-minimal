@@ -30,7 +30,7 @@
 //! ## Shared state (RelayState)
 //! State shared across all sessions is managed via `Arc<Mutex<RelayState>>`.
 //! - `sessions`: list of active sessions
-//! - `namespace_publishers`: namespace-to-publisher mapping
+//! - `namespace_to_publisher`: namespace-to-publisher mapping
 //! - `subscriptions`: list of active subscriptions
 
 use std::collections::HashMap;
@@ -64,7 +64,7 @@ pub struct Relay {
 struct RelayState {
     next_session_id: u64,
     sessions: HashMap<SessionId, Arc<MoqtSession>>,
-    namespace_publishers: HashMap<TrackNamespace, SessionId>,
+    namespace_to_publisher: HashMap<TrackNamespace, SessionId>,
     subscriptions: Vec<SubscriptionEntry>,
 }
 
@@ -80,20 +80,20 @@ impl RelayState {
     /// Remove a session and all associated namespace registrations and subscriptions.
     fn remove_session(&mut self, id: SessionId) {
         self.sessions.remove(&id);
-        self.namespace_publishers.retain(|_, v| *v != id);
+        self.namespace_to_publisher.retain(|_, v| *v != id);
         self.subscriptions
             .retain(|sub| sub.subscriber_session != id && sub.publisher_session != id);
     }
 
     /// Register a namespace as published by the given session.
     fn register_namespace(&mut self, namespace: TrackNamespace, session_id: SessionId) {
-        self.namespace_publishers.insert(namespace, session_id);
+        self.namespace_to_publisher.insert(namespace, session_id);
     }
 
     /// Find the publisher session for a namespace (prefix match).
     fn find_publisher(&self, namespace: &TrackNamespace) -> Option<(SessionId, Arc<MoqtSession>)> {
         let pub_id = self
-            .namespace_publishers
+            .namespace_to_publisher
             .iter()
             .find_map(|(registered_ns, sid)| {
                 if registered_ns.fields.len() <= namespace.fields.len()
@@ -184,7 +184,7 @@ impl Relay {
             state: Arc::new(Mutex::new(RelayState {
                 next_session_id: 0,
                 sessions: HashMap::new(),
-                namespace_publishers: HashMap::new(),
+                namespace_to_publisher: HashMap::new(),
                 subscriptions: Vec::new(),
             })),
         }
