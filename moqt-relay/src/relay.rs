@@ -366,6 +366,9 @@ async fn handle_subscribe(
         };
 
     // === Forward SUBSCRIBE to publisher via session API ===
+    // NOTE: No subscription aggregation — each subscriber triggers a new
+    // SUBSCRIBE to the publisher, even if another subscriber already
+    // subscribed to the same track.
     let track_name_str = std::str::from_utf8(&msg.track_name)?;
     let mut subscription = publisher_session
         .subscribe(
