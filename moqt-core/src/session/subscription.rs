@@ -6,22 +6,28 @@
 use anyhow::{Result, bail};
 
 use crate::message::publish_done::PublishDoneMessage;
+use crate::message::subscribe_ok::SubscribeOkMessage;
 use crate::session::request_stream::{RequestMessage, RequestStreamReader};
 
 /// An established subscription (subscriber side).
 /// Created by `MoqtSession::subscribe()` after receiving SUBSCRIBE_OK.
 pub struct Subscription {
-    /// Track alias assigned by the publisher.
-    pub track_alias: u64,
+    /// The SUBSCRIBE_OK message received from the publisher.
+    pub subscribe_ok: SubscribeOkMessage,
     reader: RequestStreamReader,
 }
 
 impl Subscription {
-    pub(crate) fn new(track_alias: u64, reader: RequestStreamReader) -> Self {
+    pub(crate) fn new(subscribe_ok: SubscribeOkMessage, reader: RequestStreamReader) -> Self {
         Self {
-            track_alias,
+            subscribe_ok,
             reader,
         }
+    }
+
+    /// Track alias assigned by the publisher.
+    pub fn track_alias(&self) -> u64 {
+        self.subscribe_ok.track_alias
     }
 
     /// Wait for PUBLISH_DONE from the publisher.

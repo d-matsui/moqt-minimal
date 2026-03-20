@@ -34,23 +34,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
-use quinn::{Connection, Endpoint};
+use quinn::Endpoint;
 use tokio::sync::Mutex;
 
 use moqt_core::data::subgroup_header::SubgroupHeader;
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::request_error::RequestErrorMessage;
-use moqt_core::message::subscribe::SubscribeMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::{DataStreamReader, DataStreamWriter};
 use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
-use moqt_core::session::request_id::RequestIdAllocator;
-use moqt_core::session::request_stream::{
-    RequestMessage, RequestStreamReader, RequestStreamWriter,
-};
 use moqt_core::session::subscribe_request::SubscribeRequest;
 
 /// Unique identifier for a session. Assigned sequentially per connection.
@@ -74,14 +69,11 @@ struct RelayState {
     namespace_publishers: HashMap<TrackNamespace, SessionId>,
     /// List of active subscriptions. Used to identify relay destinations for data streams.
     subscriptions: Vec<SubscriptionEntry>,
-    /// Server-side request ID allocator (generates odd IDs).
-    /// Assigns new IDs when forwarding SUBSCRIBE to publishers.
-    request_id_alloc: RequestIdAllocator,
 }
 
-/// Per-session state. Holds a reference to the QUIC connection.
+/// Per-session state. Holds a reference to the MOQT session.
 struct SessionState {
-    connection: Connection,
+    session: Arc<MoqtSession>,
 }
 
 /// Subscription entry. Records the mapping between a subscriber and a publisher.
@@ -114,7 +106,6 @@ impl Relay {
                 sessions: HashMap::new(),
                 namespace_publishers: HashMap::new(),
                 subscriptions: Vec::new(),
-                request_id_alloc: RequestIdAllocator::server(),
             })),
         }
     }
@@ -139,6 +130,9 @@ impl Relay {
 async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayState>>) -> Result<()> {
     let connection = incoming.await?;
 
+    // === SETUP exchange ===
+    let session = Arc::new(MoqtSession::accept(connection).await?);
+
     // Assign a session ID and register in the session list
     let session_id = {
         let mut s = state.lock().await;
@@ -147,14 +141,11 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
         s.sessions.insert(
             id,
             SessionState {
-                connection: connection.clone(),
+                session: session.clone(),
             },
         );
         id
     };
-
-    // === SETUP exchange ===
-    let session = MoqtSession::accept(connection.clone()).await?;
 
     // === Main loop: process requests and data streams concurrently ===
     loop {
@@ -163,9 +154,8 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
                 match request {
                     Ok(event) => {
                         let state = state.clone();
-                        let conn = session.connection().clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_request_event(session_id, event, state, conn).await {
+                            if let Err(e) = handle_request_event(session_id, event, state).await {
                                 eprintln!("request error: {e}");
                             }
                         });
@@ -228,7 +218,7 @@ async fn handle_data_stream(
     // then open uni streams to each subscriber
     let subscriber_writers: Vec<DataStreamWriter> = {
         let s = state.lock().await;
-        let sub_conns: Vec<Connection> = s
+        let sub_conns: Vec<quinn::Connection> = s
             .subscriptions
             .iter()
             .filter(|sub| {
@@ -237,7 +227,7 @@ async fn handle_data_stream(
             .filter_map(|sub| {
                 s.sessions
                     .get(&sub.subscriber_session)
-                    .map(|sess| sess.connection.clone())
+                    .map(|sess| sess.session.connection().clone())
             })
             .collect();
         // Release the lock before opening streams (since it involves await)
@@ -299,7 +289,6 @@ async fn handle_request_event(
     session_id: SessionId,
     event: RequestEvent,
     state: Arc<Mutex<RelayState>>,
-    connection: Connection,
 ) -> Result<()> {
     match event {
         RequestEvent::PublishNamespace(mut request) => {
@@ -311,7 +300,7 @@ async fn handle_request_event(
             request.accept().await?;
         }
         RequestEvent::Subscribe(request) => {
-            handle_subscribe(session_id, request, state, connection).await?;
+            handle_subscribe(session_id, request, state).await?;
         }
     }
 
@@ -321,17 +310,15 @@ async fn handle_request_event(
 /// Handle a SUBSCRIBE message.
 ///
 /// 1. Check subscription filter (only NextGroupStart supported)
-/// 2. Find publisher by namespace (prefix match)
-/// 3. Forward SUBSCRIBE to publisher (with relay-assigned request ID)
-/// 4. Receive SUBSCRIBE_OK from publisher
-/// 5. Record subscription entry (used for data stream relay)
-/// 6. Forward SUBSCRIBE_OK to subscriber
-/// 7. Wait for PUBLISH_DONE from publisher and forward to subscriber
+/// 2. Find publisher session by namespace (prefix match)
+/// 3. Forward SUBSCRIBE to publisher via session API
+/// 4. Record subscription entry (used for data stream relay)
+/// 5. Forward SUBSCRIBE_OK to subscriber
+/// 6. Wait for PUBLISH_DONE from publisher and forward to subscriber
 async fn handle_subscribe(
     subscriber_session: SessionId,
     request: SubscribeRequest,
     state: Arc<Mutex<RelayState>>,
-    _subscriber_conn: Connection,
 ) -> Result<()> {
     let msg = request.message.clone();
     let subscriber_request = Arc::new(Mutex::new(request));
@@ -357,9 +344,9 @@ async fn handle_subscribe(
         return Ok(());
     }
 
-    // === Find publisher ===
+    // === Find publisher session ===
     // Prefix-match: registered ["example"] matches subscribe ["example", "live"].
-    let (publisher_session_id, publisher_conn) = {
+    let (publisher_session_id, publisher_session) = {
         let s = state.lock().await;
         let ns = &msg.track_namespace;
         let pub_id = s
@@ -380,13 +367,13 @@ async fn handle_subscribe(
             });
         match pub_id {
             Some(id) => {
-                let conn = s
+                let session = s
                     .sessions
                     .get(&id)
                     .ok_or_else(|| anyhow::anyhow!("publisher session gone"))?
-                    .connection
+                    .session
                     .clone();
-                (id, conn)
+                (id, session)
             }
             None => {
                 let err = RequestErrorMessage {
@@ -402,33 +389,16 @@ async fn handle_subscribe(
         }
     };
 
-    // === Forward SUBSCRIBE to publisher ===
-    // Assign a relay-owned request ID so the relay can manage multiple subscribers.
-    let (pub_send, pub_recv) = publisher_conn.open_bi().await?;
-    let mut pub_writer = RequestStreamWriter::new(pub_send);
-    let mut pub_reader = RequestStreamReader::new(pub_recv);
+    // === Forward SUBSCRIBE to publisher via session API ===
+    let mut subscription = publisher_session
+        .subscribe(
+            msg.track_namespace.clone(),
+            msg.track_name.clone(),
+            msg.parameters.clone(),
+        )
+        .await?;
 
-    let relay_request_id = {
-        let mut s = state.lock().await;
-        s.request_id_alloc.allocate()
-    };
-    let upstream_subscribe = SubscribeMessage {
-        request_id: relay_request_id,
-        required_request_id_delta: 0,
-        track_namespace: msg.track_namespace.clone(),
-        track_name: msg.track_name.clone(),
-        parameters: msg.parameters.clone(),
-    };
-    pub_writer.write_subscribe(&upstream_subscribe).await?;
-
-    // === Receive and forward SUBSCRIBE_OK ===
-    let pub_msg = pub_reader.read_message().await?;
-    let subscribe_ok = match pub_msg {
-        RequestMessage::SubscribeOk(ok) => ok,
-        _ => bail!("expected SUBSCRIBE_OK from publisher"),
-    };
-
-    let track_alias = subscribe_ok.track_alias;
+    let track_alias = subscription.track_alias();
 
     // === Record subscription entry ===
     {
@@ -448,15 +418,11 @@ async fn handle_subscribe(
     subscriber_request
         .lock()
         .await
-        .accept(&subscribe_ok)
+        .accept(&subscription.subscribe_ok)
         .await?;
 
     // === Wait for PUBLISH_DONE and forward ===
-    let pub_msg = pub_reader.read_message().await?;
-    let publish_done = match pub_msg {
-        RequestMessage::PublishDone(done) => done,
-        _ => bail!("expected PUBLISH_DONE from publisher"),
-    };
+    let publish_done = subscription.recv_publish_done().await?;
 
     let subs_to_notify: Vec<Arc<Mutex<SubscribeRequest>>> = {
         let s = state.lock().await;

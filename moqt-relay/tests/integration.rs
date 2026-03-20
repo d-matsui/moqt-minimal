@@ -68,7 +68,7 @@ async fn connect_client(
 }
 
 /// Helper: send PUBLISH_NAMESPACE and receive REQUEST_OK
-async fn publish_namespace(session: &mut MoqtSession, namespace: TrackNamespace) {
+async fn publish_namespace(session: &MoqtSession, namespace: TrackNamespace) {
     session.publish_namespace(namespace).await.unwrap();
 }
 
@@ -110,11 +110,11 @@ async fn publish_namespace_registration() {
     // Wait for relay to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let mut pub_session = connect_client(addr, cert_der).await;
+    let pub_session = connect_client(addr, cert_der).await;
 
     // Send PUBLISH_NAMESPACE
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -137,9 +137,9 @@ async fn subscribe_via_relay() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher connects and registers namespace
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -166,7 +166,7 @@ async fn subscribe_via_relay() {
     });
 
     // Subscriber connects and sends SUBSCRIBE
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let subscription = sub_session
         .subscribe(
             TrackNamespace {
@@ -180,7 +180,7 @@ async fn subscribe_via_relay() {
         .await
         .unwrap();
 
-    assert_eq!(subscription.track_alias, 1);
+    assert_eq!(subscription.track_alias(), 1);
 }
 
 /// 5.1: Object data forwarding through Relay
@@ -196,9 +196,9 @@ async fn object_forwarding() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher setup
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -256,7 +256,7 @@ async fn object_forwarding() {
     });
 
     // Subscriber setup
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let sub_conn = sub_session.connection().clone();
     let _subscription = sub_session
         .subscribe(
@@ -318,9 +318,9 @@ async fn publish_done_forwarding() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher setup
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -377,7 +377,7 @@ async fn publish_done_forwarding() {
     });
 
     // Subscriber setup
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let mut subscription = sub_session
         .subscribe(
             TrackNamespace {
@@ -405,9 +405,9 @@ async fn multiple_groups() {
     tokio::spawn(async move { relay.run().await.unwrap() });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -469,7 +469,7 @@ async fn multiple_groups() {
     });
 
     // Subscriber
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let sub_conn = sub_session.connection().clone();
     let mut subscription = sub_session
         .subscribe(
@@ -545,9 +545,9 @@ async fn late_join() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher connects first and registers
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -610,7 +610,7 @@ async fn late_join() {
     // Subscriber connects AFTER publisher is ready (simulating late join)
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let sub_conn = sub_session.connection().clone();
     let _subscription = sub_session
         .subscribe(
@@ -691,7 +691,7 @@ async fn subscribe_unknown_namespace() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Subscriber connects (no publisher registered)
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let result = sub_session
         .subscribe(
             TrackNamespace {
@@ -724,9 +724,9 @@ async fn multiple_subscribers() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher setup
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -797,7 +797,7 @@ async fn multiple_subscribers() {
         addr: SocketAddr,
         cert_der: rustls_pki_types::CertificateDer<'static>,
     ) -> Vec<u8> {
-        let mut session = connect_client(addr, cert_der).await;
+        let session = connect_client(addr, cert_der).await;
         let conn = session.connection().clone();
         let _subscription = session
             .subscribe(
@@ -854,9 +854,9 @@ async fn multiple_tracks() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Publisher
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -948,7 +948,7 @@ async fn multiple_tracks() {
     });
 
     // Subscriber: subscribe to both tracks
-    let mut sub_session = connect_client(addr, cert_der).await;
+    let sub_session = connect_client(addr, cert_der).await;
     let sub_conn = sub_session.connection().clone();
 
     // Subscribe to video
@@ -1012,9 +1012,9 @@ async fn subscriber_disconnect() {
     tokio::spawn(async move { relay.run().await.unwrap() });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let mut pub_session = connect_client(addr, cert_der.clone()).await;
+    let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(
-        &mut pub_session,
+        &pub_session,
         TrackNamespace {
             fields: vec![b"example".to_vec()],
         },
@@ -1071,7 +1071,7 @@ async fn subscriber_disconnect() {
 
     // Subscriber connects, subscribes, receives 1 group, then disconnects
     {
-        let mut sub_session = connect_client(addr, cert_der).await;
+        let sub_session = connect_client(addr, cert_der).await;
         let sub_conn = sub_session.connection().clone();
         let _subscription = sub_session
             .subscribe(

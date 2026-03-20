@@ -34,10 +34,7 @@ use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::data_stream::DataStreamWriter;
-use moqt_core::session::moqt_session::MoqtSession;
-use moqt_core::session::request_stream::{
-    RequestMessage, RequestStreamReader, RequestStreamWriter,
-};
+use moqt_core::session::moqt_session::{MoqtSession, RequestEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -77,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Connected.");
 
     // === SETUP exchange ===
-    let mut session = MoqtSession::connect(connection.clone()).await?;
+    let session = MoqtSession::connect(connection.clone()).await?;
     let connection = session.connection().clone();
     eprintln!("SETUP exchange complete.");
 
@@ -90,17 +87,13 @@ async fn main() -> anyhow::Result<()> {
 
     // === Wait for SUBSCRIBE ===
     eprintln!("Waiting for SUBSCRIBE...");
-    let (sub_send, sub_recv) = connection.accept_bi().await?;
-    let mut sub_writer = RequestStreamWriter::new(sub_send);
-    let mut sub_reader = RequestStreamReader::new(sub_recv);
-    let sub_msg = sub_reader.read_message().await?;
-    let subscribe = match sub_msg {
-        RequestMessage::Subscribe(s) => s,
+    let mut request = match session.next_request().await? {
+        RequestEvent::Subscribe(r) => r,
         _ => anyhow::bail!("expected SUBSCRIBE"),
     };
     eprintln!(
         "Received SUBSCRIBE for track: {:?}",
-        String::from_utf8_lossy(&subscribe.track_name)
+        String::from_utf8_lossy(&request.message.track_name)
     );
 
     // Send SUBSCRIBE_OK (Track Alias = 1)
@@ -109,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
         parameters: vec![],
         track_properties_raw: vec![],
     };
-    sub_writer.write_subscribe_ok(&ok).await?;
+    request.accept(&ok).await?;
     eprintln!("Sent SUBSCRIBE_OK (alias=1).");
 
     if pipe_mode {
@@ -123,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
             stream_count,
             reason_phrase: ReasonPhrase { value: vec![] },
         };
-        sub_writer.write_publish_done(&done).await?;
+        request.send_publish_done(&done).await?;
         // Wait for data to be flushed before closing the connection
         tokio::time::sleep(Duration::from_secs(1)).await;
         eprintln!("Sent PUBLISH_DONE ({stream_count} streams). Exiting.");
@@ -161,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
             stream_count: 5,
             reason_phrase: ReasonPhrase { value: vec![] },
         };
-        sub_writer.write_publish_done(&done).await?;
+        request.send_publish_done(&done).await?;
         eprintln!("Sent PUBLISH_DONE. Exiting.");
     }
 

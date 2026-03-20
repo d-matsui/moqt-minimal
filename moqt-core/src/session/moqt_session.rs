@@ -82,7 +82,7 @@ impl MoqtSession {
     /// Register a namespace with the peer.
     /// Opens a bidi stream, sends PUBLISH_NAMESPACE, and waits for REQUEST_OK.
     /// Returns an error if the peer responds with REQUEST_ERROR.
-    pub async fn publish_namespace(&mut self, namespace: TrackNamespace) -> Result<()> {
+    pub async fn publish_namespace(&self, namespace: TrackNamespace) -> Result<()> {
         let (send, recv) = self.connection.open_bi().await?;
         let mut writer = RequestStreamWriter::new(send);
         let mut reader = RequestStreamReader::new(recv);
@@ -111,7 +111,7 @@ impl MoqtSession {
     /// Opens a bidi stream, sends SUBSCRIBE, and waits for SUBSCRIBE_OK.
     /// Returns a `Subscription` that can be used to receive PUBLISH_DONE.
     pub async fn subscribe(
-        &mut self,
+        &self,
         namespace: TrackNamespace,
         track_name: Vec<u8>,
         parameters: Vec<MessageParameter>,
@@ -131,7 +131,7 @@ impl MoqtSession {
 
         let response = reader.read_message().await?;
         match response {
-            RequestMessage::SubscribeOk(ok) => Ok(Subscription::new(ok.track_alias, reader)),
+            RequestMessage::SubscribeOk(ok) => Ok(Subscription::new(ok, reader)),
             RequestMessage::RequestError(err) => {
                 bail!(
                     "SUBSCRIBE rejected: {}",
