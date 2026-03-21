@@ -53,7 +53,6 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Connecting to relay at {relay_addr}...");
     }
     let session = client::connect(relay_addr, "localhost", TlsConfig::Insecure).await?;
-    let connection = session.connection().clone();
     if !pipe_mode {
         eprintln!("Connected. SETUP exchange complete.");
     }
@@ -75,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
             subscription.track_alias()
         );
     }
+
+    // Clone connection for closing later (session is moved into the receive task)
+    let connection = session.connection().clone();
 
     // Receive Object streams
     let receive_handle = tokio::spawn(async move {

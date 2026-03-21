@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 
-use crate::message::publish_done::PublishDoneMessage;
+use crate::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use crate::message::request_error::RequestErrorMessage;
 use crate::message::subscribe::SubscribeMessage;
 use crate::message::subscribe_ok::SubscribeOkMessage;
@@ -25,8 +25,20 @@ impl SubscribeRequest {
         Self { message, writer }
     }
 
-    /// Accept the subscription by sending SUBSCRIBE_OK.
-    pub async fn accept(&mut self, ok: &SubscribeOkMessage) -> Result<()> {
+    /// Accept the subscription by sending SUBSCRIBE_OK with the given track alias.
+    /// Uses default values for parameters and track properties.
+    pub async fn accept(&mut self, track_alias: u64) -> Result<()> {
+        let ok = SubscribeOkMessage {
+            track_alias,
+            parameters: vec![],
+            track_properties_raw: vec![],
+        };
+        self.writer.write_subscribe_ok(&ok).await
+    }
+
+    /// Accept the subscription by forwarding a full SUBSCRIBE_OK message.
+    /// Used by the relay to forward the publisher's response as-is.
+    pub async fn forward_subscribe_ok(&mut self, ok: &SubscribeOkMessage) -> Result<()> {
         self.writer.write_subscribe_ok(ok).await
     }
 
@@ -40,8 +52,19 @@ impl SubscribeRequest {
         self.writer.write_request_error(&err).await
     }
 
-    /// Send PUBLISH_DONE to signal end of publishing for this subscription.
-    pub async fn send_publish_done(&mut self, done: &PublishDoneMessage) -> Result<()> {
+    /// Send PUBLISH_DONE with TRACK_ENDED status to signal normal end of publishing.
+    pub async fn send_publish_done(&mut self, stream_count: u64) -> Result<()> {
+        let done = PublishDoneMessage {
+            status_code: STATUS_TRACK_ENDED,
+            stream_count,
+            reason_phrase: ReasonPhrase::from(""),
+        };
+        self.writer.write_publish_done(&done).await
+    }
+
+    /// Forward a full PUBLISH_DONE message.
+    /// Used by the relay to forward the publisher's message as-is.
+    pub async fn forward_publish_done(&mut self, done: &PublishDoneMessage) -> Result<()> {
         self.writer.write_publish_done(done).await
     }
 }

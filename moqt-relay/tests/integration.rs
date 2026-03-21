@@ -3,8 +3,6 @@ use std::sync::Once;
 
 use moqt_core::client::{self, TlsConfig};
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
-use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::quic_config;
 use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
@@ -132,12 +130,7 @@ async fn subscribe_via_relay() {
         let event = pub_session.next_event().await.unwrap();
         match event {
             SessionEvent::Subscribe(mut req) => {
-                let ok = SubscribeOkMessage {
-                    track_alias: 1,
-                    parameters: vec![],
-                    track_properties_raw: vec![],
-                };
-                req.accept(&ok).await.unwrap();
+                req.accept(1).await.unwrap();
             }
             _ => panic!("expected Subscribe event"),
         }
@@ -181,12 +174,7 @@ async fn object_forwarding() {
         let event = pub_session.next_event().await.unwrap();
         match event {
             SessionEvent::Subscribe(mut req) => {
-                let ok = SubscribeOkMessage {
-                    track_alias: 1,
-                    parameters: vec![],
-                    track_properties_raw: vec![],
-                };
-                req.accept(&ok).await.unwrap();
+                req.accept(1).await.unwrap();
 
                 // Send a subgroup with 2 objects
                 let mut group = pub_session.open_group(1, 0).await.unwrap();
@@ -251,12 +239,7 @@ async fn publish_done_forwarding() {
         let event = pub_session.next_event().await.unwrap();
         match event {
             SessionEvent::Subscribe(mut req) => {
-                let ok = SubscribeOkMessage {
-                    track_alias: 1,
-                    parameters: vec![],
-                    track_properties_raw: vec![],
-                };
-                req.accept(&ok).await.unwrap();
+                req.accept(1).await.unwrap();
 
                 // Send one object
                 let mut group = pub_session.open_group(1, 0).await.unwrap();
@@ -264,12 +247,7 @@ async fn publish_done_forwarding() {
                 group.finish().unwrap();
 
                 // Send PUBLISH_DONE on the bidi stream
-                let done = PublishDoneMessage {
-                    status_code: STATUS_TRACK_ENDED,
-                    stream_count: 1,
-                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
-                };
-                req.send_publish_done(&done).await.unwrap();
+                req.send_publish_done(1).await.unwrap();
             }
             _ => panic!("expected Subscribe event"),
         }
@@ -311,12 +289,7 @@ async fn multiple_groups() {
         let event = pub_session.next_event().await.unwrap();
         match event {
             SessionEvent::Subscribe(mut req) => {
-                let ok = SubscribeOkMessage {
-                    track_alias: 1,
-                    parameters: vec![],
-                    track_properties_raw: vec![],
-                };
-                req.accept(&ok).await.unwrap();
+                req.accept(1).await.unwrap();
 
                 for group_id in 0u64..3 {
                     let mut group = pub_session.open_group(1, group_id).await.unwrap();
@@ -327,12 +300,7 @@ async fn multiple_groups() {
                 }
 
                 // PUBLISH_DONE
-                let done = PublishDoneMessage {
-                    status_code: STATUS_TRACK_ENDED,
-                    stream_count: 3,
-                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
-                };
-                req.send_publish_done(&done).await.unwrap();
+                req.send_publish_done(3).await.unwrap();
             }
             _ => panic!("expected Subscribe event"),
         }
@@ -411,12 +379,7 @@ async fn late_join() {
         let event = pub_session.next_event().await.unwrap();
         match event {
             SessionEvent::Subscribe(mut req) => {
-                let ok = SubscribeOkMessage {
-                    track_alias: 1,
-                    parameters: vec![],
-                    track_properties_raw: vec![],
-                };
-                req.accept(&ok).await.unwrap();
+                req.accept(1).await.unwrap();
 
                 // Send 2 groups after subscriber joins
                 for group_id in 0u64..2 {
@@ -425,12 +388,7 @@ async fn late_join() {
                     group.write_object(payload.as_bytes()).await.unwrap();
                 }
 
-                let done = PublishDoneMessage {
-                    status_code: STATUS_TRACK_ENDED,
-                    stream_count: 2,
-                    reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
-                };
-                req.send_publish_done(&done).await.unwrap();
+                req.send_publish_done(2).await.unwrap();
             }
             _ => panic!("expected Subscribe event"),
         }
@@ -553,12 +511,7 @@ async fn multiple_subscribers() {
             SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
-        let ok = SubscribeOkMessage {
-            track_alias: 1,
-            parameters: vec![],
-            track_properties_raw: vec![],
-        };
-        req.accept(&ok).await.unwrap();
+        req.accept(1).await.unwrap();
 
         // Wait for both subscribers to be registered via aggregation
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -568,12 +521,7 @@ async fn multiple_subscribers() {
         group.write_object(b"shared").await.unwrap();
         group.finish().unwrap();
 
-        let done = PublishDoneMessage {
-            status_code: STATUS_TRACK_ENDED,
-            stream_count: 1,
-            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
-        };
-        req.send_publish_done(&done).await.unwrap();
+        req.send_publish_done(1).await.unwrap();
     });
 
     // Helper to subscribe and receive objects
@@ -638,12 +586,7 @@ async fn multiple_tracks() {
             SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
-        let ok_v = SubscribeOkMessage {
-            track_alias: 1,
-            parameters: vec![],
-            track_properties_raw: vec![],
-        };
-        req_v.accept(&ok_v).await.unwrap();
+        req_v.accept(1).await.unwrap();
 
         // Accept SUBSCRIBE for audio (alias=2)
         let event_a = pub_session.next_event().await.unwrap();
@@ -651,12 +594,7 @@ async fn multiple_tracks() {
             SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
-        let ok_a = SubscribeOkMessage {
-            track_alias: 2,
-            parameters: vec![],
-            track_properties_raw: vec![],
-        };
-        req_a.accept(&ok_a).await.unwrap();
+        req_a.accept(2).await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -669,13 +607,8 @@ async fn multiple_tracks() {
         group_a.write_object(b"audio").await.unwrap();
 
         // PUBLISH_DONE on both
-        let done = PublishDoneMessage {
-            status_code: STATUS_TRACK_ENDED,
-            stream_count: 1,
-            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
-        };
-        req_v.send_publish_done(&done).await.unwrap();
-        req_a.send_publish_done(&done).await.unwrap();
+        req_v.send_publish_done(1).await.unwrap();
+        req_a.send_publish_done(1).await.unwrap();
     });
 
     // Subscriber: subscribe to both tracks
@@ -744,12 +677,7 @@ async fn subscription_aggregation() {
             SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
-        let ok = SubscribeOkMessage {
-            track_alias: 1,
-            parameters: vec![],
-            track_properties_raw: vec![],
-        };
-        req.accept(&ok).await.unwrap();
+        req.accept(1).await.unwrap();
 
         // Wait for both subscribers to be registered
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -759,12 +687,7 @@ async fn subscription_aggregation() {
         group.write_object(b"aggr").await.unwrap();
         group.finish().unwrap();
 
-        let done = PublishDoneMessage {
-            status_code: STATUS_TRACK_ENDED,
-            stream_count: 1,
-            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
-        };
-        req.send_publish_done(&done).await.unwrap();
+        req.send_publish_done(1).await.unwrap();
 
         // Verify no second SUBSCRIBE arrives (would timeout)
         let result = tokio::time::timeout(
@@ -845,12 +768,7 @@ async fn subscriber_disconnect() {
         let event = pub_session.next_event().await.unwrap();
         match event {
             SessionEvent::Subscribe(mut req) => {
-                let ok = SubscribeOkMessage {
-                    track_alias: 1,
-                    parameters: vec![],
-                    track_properties_raw: vec![],
-                };
-                req.accept(&ok).await.unwrap();
+                req.accept(1).await.unwrap();
 
                 // Send a few groups
                 for group_id in 0u64..3 {
@@ -892,7 +810,7 @@ async fn subscriber_disconnect() {
         }
 
         // Disconnect subscriber
-        sub_session.connection().close(0u32.into(), b"done");
+        sub_session.close();
     }
 
     // Publisher should complete without error

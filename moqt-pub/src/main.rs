@@ -28,9 +28,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use moqt_core::client::{self, TlsConfig};
-use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
-use moqt_core::message::subscribe_ok::SubscribeOkMessage;
-use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::session::group::GroupWriter;
 use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
@@ -84,12 +81,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Send SUBSCRIBE_OK (Track Alias = 1)
-    let ok = SubscribeOkMessage {
-        track_alias: 1,
-        parameters: vec![],
-        track_properties_raw: vec![],
-    };
-    request.accept(&ok).await?;
+    request.accept(1).await?;
     eprintln!("Sent SUBSCRIBE_OK (alias=1).");
 
     if pipe_mode {
@@ -97,12 +89,7 @@ async fn main() -> anyhow::Result<()> {
         let stream_count = send_from_stdin(&session, track_name).await?;
 
         // Send PUBLISH_DONE
-        let done = PublishDoneMessage {
-            status_code: STATUS_TRACK_ENDED,
-            stream_count,
-            reason_phrase: ReasonPhrase::from(""),
-        };
-        request.send_publish_done(&done).await?;
+        request.send_publish_done(stream_count).await?;
         // Wait for data to be flushed before closing the connection
         tokio::time::sleep(Duration::from_secs(1)).await;
         eprintln!("Sent PUBLISH_DONE ({stream_count} streams). Exiting.");
@@ -121,12 +108,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        let done = PublishDoneMessage {
-            status_code: STATUS_TRACK_ENDED,
-            stream_count: 5,
-            reason_phrase: ReasonPhrase::from(""),
-        };
-        request.send_publish_done(&done).await?;
+        request.send_publish_done(5).await?;
         eprintln!("Sent PUBLISH_DONE. Exiting.");
     }
 

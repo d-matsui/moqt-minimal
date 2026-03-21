@@ -204,6 +204,11 @@ impl MoqtSession {
         Ok(writer)
     }
 
+    /// Close the session (send QUIC CONNECTION_CLOSE).
+    pub fn close(&self) {
+        self.connection.close(0u32.into(), b"done");
+    }
+
     /// Get a reference to the underlying QUIC connection.
     pub fn connection(&self) -> &Connection {
         &self.connection

@@ -415,7 +415,11 @@ async fn handle_subscribe(
                 .subscribers
                 .push(new_subscriber);
             drop(s);
-            subscriber_request.lock().await.accept(&ok).await?;
+            subscriber_request
+                .lock()
+                .await
+                .forward_subscribe_ok(&ok)
+                .await?;
             return Ok(());
         }
     }
@@ -462,7 +466,7 @@ async fn handle_subscribe(
     subscriber_request
         .lock()
         .await
-        .accept(&subscription.subscribe_ok)
+        .forward_subscribe_ok(&subscription.subscribe_ok)
         .await?;
 
     // === Wait for PUBLISH_DONE and forward ===
@@ -471,7 +475,7 @@ async fn handle_subscribe(
     let subs_to_notify = state.lock().await.find_subscriber_requests(&track);
 
     for req in subs_to_notify {
-        let _ = req.lock().await.send_publish_done(&publish_done).await;
+        let _ = req.lock().await.forward_publish_done(&publish_done).await;
     }
 
     Ok(())
