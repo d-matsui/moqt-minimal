@@ -27,13 +27,12 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use moqt_core::data::object::ObjectHeader;
-use moqt_core::data::subgroup_header::SubgroupHeader;
+use moqt_core::client::{self, TlsConfig};
 use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::reason_phrase::ReasonPhrase;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::data_stream::DataStreamWriter;
+use moqt_core::session::group::GroupWriter;
 use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 
 #[tokio::main]
@@ -64,18 +63,9 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.as_str())
         .unwrap_or("video");
 
-    // QUIC client config that skips certificate verification (for development)
-    let client_config = make_insecure_client_config();
-    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())?;
-    endpoint.set_default_client_config(client_config);
-
     eprintln!("Connecting to relay at {relay_addr}...");
-    let connection = endpoint.connect(relay_addr, "localhost")?.await?;
-    eprintln!("Connected.");
-
-    // === SETUP exchange ===
-    let session = MoqtSession::connect(connection).await?;
-    eprintln!("SETUP exchange complete.");
+    let session = client::connect(relay_addr, "localhost", TlsConfig::Insecure).await?;
+    eprintln!("Connected. SETUP exchange complete.");
 
     // === PUBLISH_NAMESPACE ===
     let ns = TrackNamespace::from(&[namespace] as &[&str]);
@@ -119,26 +109,14 @@ async fn main() -> anyhow::Result<()> {
     } else {
         // === Demo mode: send dummy data ===
         for group_id in 0u64..5 {
-            let header = SubgroupHeader {
-                track_alias: 1,
-                group_id,
-                has_properties: false,
-                end_of_group: true,
-                subgroup_id: None,
-                publisher_priority: None,
-            };
-            let mut data_writer = session.open_data_stream(&header).await?;
+            let mut group = session.open_group(1, group_id).await?;
 
             for obj_id in 0u64..3 {
                 let payload = format!("g{group_id}o{obj_id}");
-                let obj = ObjectHeader {
-                    object_id_delta: 0,
-                    payload_length: payload.len() as u64,
-                };
-                data_writer.write_object(&obj, payload.as_bytes()).await?;
+                group.write_object(payload.as_bytes()).await?;
             }
 
-            data_writer.finish()?;
+            group.finish()?;
             eprintln!("Sent group {group_id} (3 objects)");
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
@@ -232,15 +210,15 @@ async fn send_from_stdin(session: &MoqtSession, _track_name: &str) -> anyhow::Re
 
     let mut group_id: u64 = 0;
     let mut object_id: u64 = 0;
-    let mut current_writer: Option<DataStreamWriter> = None;
+    let mut current_group: Option<GroupWriter> = None;
     let mut stream_count: u64 = 0;
     let mut group_started = false;
 
     while let Some(frame) = frame_rx.recv().await {
         // Start a new Group on each keyframe (except the very first frame)
         if frame.is_keyframe && group_started {
-            if let Some(mut writer) = current_writer.take() {
-                writer.finish()?;
+            if let Some(mut group) = current_group.take() {
+                group.finish()?;
             }
             stream_count += 1;
             eprintln!("Sent group {group_id} ({object_id} objects)");
@@ -248,94 +226,25 @@ async fn send_from_stdin(session: &MoqtSession, _track_name: &str) -> anyhow::Re
             object_id = 0;
         }
 
-        // Open a new data stream if needed
-        if current_writer.is_none() {
-            let header = SubgroupHeader {
-                track_alias: 1,
-                group_id,
-                has_properties: false,
-                end_of_group: true,
-                subgroup_id: None,
-                publisher_priority: None,
-            };
-            current_writer = Some(session.open_data_stream(&header).await?);
+        // Open a new group if needed
+        if current_group.is_none() {
+            current_group = Some(session.open_group(1, group_id).await?);
             group_started = true;
         }
 
         // Write VP8 frame as one MOQT Object
-        if let Some(ref mut writer) = current_writer {
-            let obj = ObjectHeader {
-                object_id_delta: 0,
-                payload_length: frame.data.len() as u64,
-            };
-            writer.write_object(&obj, &frame.data).await?;
+        if let Some(ref mut group) = current_group {
+            group.write_object(&frame.data).await?;
             object_id += 1;
         }
     }
 
-    // Close the last Group's stream
-    if let Some(mut writer) = current_writer.take() {
-        writer.finish()?;
+    // Close the last Group
+    if let Some(mut group) = current_group.take() {
+        group.finish()?;
         stream_count += 1;
         eprintln!("Sent group {group_id} ({object_id} objects)");
     }
 
     Ok(stream_count)
-}
-
-/// Creates a QUIC client config that skips certificate verification.
-/// For development only. Do not use in production.
-///
-/// Since the relay server uses a self-signed certificate, normal certificate
-/// verification would fail. This config unconditionally trusts all certificates.
-fn make_insecure_client_config() -> quinn::ClientConfig {
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use std::sync::Arc;
-
-    /// A dummy verifier that trusts all certificates.
-    #[derive(Debug)]
-    struct SkipVerification;
-
-    impl ServerCertVerifier for SkipVerification {
-        fn verify_server_cert(
-            &self,
-            _: &rustls_pki_types::CertificateDer<'_>,
-            _: &[rustls_pki_types::CertificateDer<'_>],
-            _: &rustls::pki_types::ServerName<'_>,
-            _: &[u8],
-            _: rustls::pki_types::UnixTime,
-        ) -> Result<ServerCertVerified, rustls::Error> {
-            Ok(ServerCertVerified::assertion())
-        }
-        fn verify_tls12_signature(
-            &self,
-            _: &[u8],
-            _: &rustls_pki_types::CertificateDer<'_>,
-            _: &rustls::DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn verify_tls13_signature(
-            &self,
-            _: &[u8],
-            _: &rustls_pki_types::CertificateDer<'_>,
-            _: &rustls::DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            rustls::crypto::ring::default_provider()
-                .signature_verification_algorithms
-                .supported_schemes()
-        }
-    }
-
-    let mut client_crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipVerification))
-        .with_no_client_auth();
-    client_crypto.alpn_protocols = vec![moqt_core::quic_config::ALPN.to_vec()];
-
-    let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap();
-    quinn::ClientConfig::new(Arc::new(quic_config))
 }

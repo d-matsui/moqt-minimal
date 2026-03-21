@@ -17,10 +17,10 @@
 use std::io::Write;
 use std::net::SocketAddr;
 
-use moqt_core::data::object::resolve_object_id;
+use moqt_core::client::{self, TlsConfig};
 use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
+use moqt_core::session::moqt_session::SessionEvent;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -49,23 +49,13 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.as_str())
         .unwrap_or("video");
 
-    let client_config = make_insecure_client_config();
-    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())?;
-    endpoint.set_default_client_config(client_config);
-
     if !pipe_mode {
         eprintln!("Connecting to relay at {relay_addr}...");
     }
-    let connection = endpoint.connect(relay_addr, "localhost")?.await?;
-    if !pipe_mode {
-        eprintln!("Connected.");
-    }
-
-    // SETUP exchange
-    let session = MoqtSession::connect(connection.clone()).await?;
+    let session = client::connect(relay_addr, "localhost", TlsConfig::Insecure).await?;
     let connection = session.connection().clone();
     if !pipe_mode {
-        eprintln!("SETUP exchange complete.");
+        eprintln!("Connected. SETUP exchange complete.");
     }
 
     // SUBSCRIBE
@@ -93,8 +83,8 @@ async fn main() -> anyhow::Result<()> {
         let mut frame_index: u64 = 0;
 
         loop {
-            let (header, mut data_reader) = match session.next_event().await {
-                Ok(SessionEvent::DataStream(h, r)) => (h, r),
+            let mut group = match session.next_event().await {
+                Ok(SessionEvent::DataStream(g)) => g,
                 Ok(_) => continue, // ignore non-data events
                 Err(_) => break,   // connection closed
             };
@@ -116,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 // Write each Object as an IVF frame
-                while let Ok(Some((_obj, payload, _raw))) = data_reader.read_object().await {
+                while let Ok(Some(payload)) = group.read_object().await {
                     let mut out = stdout.lock();
                     let size = payload.len() as u32;
                     let _ = out.write_all(&size.to_le_bytes());
@@ -129,13 +119,13 @@ async fn main() -> anyhow::Result<()> {
                 // Demo mode: print human-readable
                 eprintln!(
                     "  Group {} (alias={}):",
-                    header.group_id, header.track_alias
+                    group.group_id(),
+                    group.track_alias()
                 );
-                let mut prev_id: Option<u64> = None;
-                while let Ok(Some((obj, payload, _raw))) = data_reader.read_object().await {
-                    let id = resolve_object_id(prev_id, obj.object_id_delta);
-                    eprintln!("    Object {id}: {} bytes", payload.len());
-                    prev_id = Some(id);
+                let mut object_id: u64 = 0;
+                while let Ok(Some(payload)) = group.read_object().await {
+                    eprintln!("    Object {object_id}: {} bytes", payload.len());
+                    object_id += 1;
                 }
             }
         }
@@ -158,55 +148,4 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Done.");
     }
     Ok(())
-}
-
-fn make_insecure_client_config() -> quinn::ClientConfig {
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use std::sync::Arc;
-
-    #[derive(Debug)]
-    struct SkipVerification;
-
-    impl ServerCertVerifier for SkipVerification {
-        fn verify_server_cert(
-            &self,
-            _: &rustls_pki_types::CertificateDer<'_>,
-            _: &[rustls_pki_types::CertificateDer<'_>],
-            _: &rustls::pki_types::ServerName<'_>,
-            _: &[u8],
-            _: rustls::pki_types::UnixTime,
-        ) -> Result<ServerCertVerified, rustls::Error> {
-            Ok(ServerCertVerified::assertion())
-        }
-        fn verify_tls12_signature(
-            &self,
-            _: &[u8],
-            _: &rustls_pki_types::CertificateDer<'_>,
-            _: &rustls::DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn verify_tls13_signature(
-            &self,
-            _: &[u8],
-            _: &rustls_pki_types::CertificateDer<'_>,
-            _: &rustls::DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            rustls::crypto::ring::default_provider()
-                .signature_verification_algorithms
-                .supported_schemes()
-        }
-    }
-
-    let mut client_crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipVerification))
-        .with_no_client_auth();
-    client_crypto.alpn_protocols = vec![moqt_core::quic_config::ALPN.to_vec()];
-
-    let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap();
-    quinn::ClientConfig::new(Arc::new(quic_config))
 }

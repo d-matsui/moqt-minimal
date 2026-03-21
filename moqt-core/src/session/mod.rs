@@ -11,6 +11,7 @@
 
 pub mod control_stream;
 pub mod data_stream;
+pub mod group;
 pub mod moqt_session;
 pub mod publish_namespace_request;
 pub mod request_id;

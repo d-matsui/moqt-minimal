@@ -14,6 +14,7 @@ use crate::message::subscribe::SubscribeMessage;
 use crate::primitives::track_namespace::TrackNamespace;
 use crate::session::control_stream::{ControlStreamReader, ControlStreamWriter};
 use crate::session::data_stream::{DataStreamReader, DataStreamWriter};
+use crate::session::group::{GroupReader, GroupWriter};
 use crate::session::publish_namespace_request::PublishNamespaceRequest;
 use crate::session::request_id::RequestIdAllocator;
 use crate::session::request_stream::{RequestMessage, RequestStreamReader, RequestStreamWriter};
@@ -27,7 +28,7 @@ pub enum SessionEvent {
     /// A PUBLISH_NAMESPACE request was received on a bidi stream.
     PublishNamespace(PublishNamespaceRequest),
     /// A data stream was received on a uni stream.
-    DataStream(SubgroupHeader, DataStreamReader),
+    DataStream(GroupReader),
 }
 
 /// A MOQT session over a QUIC connection.
@@ -171,18 +172,32 @@ impl MoqtSession {
                 let recv = uni?;
                 let mut reader = DataStreamReader::new(recv);
                 let (header, _raw) = reader.read_subgroup_header().await?;
-                Ok(SessionEvent::DataStream(header, reader))
+                Ok(SessionEvent::DataStream(GroupReader::new(header, reader)))
             }
         }
+    }
+
+    /// Open a group for writing objects.
+    /// Creates a data stream with default SubgroupHeader fields
+    /// and returns a `GroupWriter` that accepts payloads only.
+    pub async fn open_group(&self, track_alias: u64, group_id: u64) -> Result<GroupWriter> {
+        let header = SubgroupHeader {
+            track_alias,
+            group_id,
+            has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
+        };
+        let writer = self.open_data_stream(&header).await?;
+        Ok(GroupWriter::new(writer))
     }
 
     /// Open an outgoing data stream (unidirectional).
     /// Writes the SubgroupHeader and returns a DataStreamWriter
     /// for writing subsequent Objects.
-    pub async fn open_data_stream(
-        &self,
-        header: &SubgroupHeader,
-    ) -> Result<DataStreamWriter> {
+    /// For low-level access (e.g. relay pass-through). Prefer `open_group` for clients.
+    pub async fn open_data_stream(&self, header: &SubgroupHeader) -> Result<DataStreamWriter> {
         let uni = self.connection.open_uni().await?;
         let mut writer = DataStreamWriter::new(uni);
         writer.write_subgroup_header(header).await?;

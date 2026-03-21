@@ -1,7 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::Once;
 
-use moqt_core::data::object::ObjectHeader;
+use moqt_core::client::{self, TlsConfig};
+use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
+use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
+use moqt_core::message::subscribe_ok::SubscribeOkMessage;
+use moqt_core::primitives::track_namespace::TrackNamespace;
+use moqt_core::quic_config;
+use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 
 static INIT: Once = Once::new();
 
@@ -12,13 +18,6 @@ fn init_crypto() {
             .expect("Failed to install rustls crypto provider");
     });
 }
-use moqt_core::data::subgroup_header::SubgroupHeader;
-use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
-use moqt_core::message::subscribe_ok::SubscribeOkMessage;
-use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::quic_config;
-use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 
 /// Helper: generate self-signed cert and return (cert_der, key_der)
 fn gen_cert() -> (
@@ -53,18 +52,9 @@ async fn connect_client(
     relay_addr: SocketAddr,
     cert_der: rustls_pki_types::CertificateDer<'static>,
 ) -> MoqtSession {
-    let client_config = quic_config::make_client_config(cert_der);
-    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
-    client_endpoint.set_default_client_config(client_config);
-
-    let connection = client_endpoint
-        .connect(relay_addr, "localhost")
-        .unwrap()
+    client::connect(relay_addr, "localhost", TlsConfig::TrustCert(cert_der))
         .await
-        .unwrap();
-
-    // SETUP exchange
-    MoqtSession::connect(connection).await.unwrap()
+        .unwrap()
 }
 
 /// Helper: send PUBLISH_NAMESPACE and receive REQUEST_OK
@@ -185,11 +175,8 @@ async fn object_forwarding() {
     let pub_session = connect_client(addr, cert_der.clone()).await;
     publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
-    // Publisher: accept SUBSCRIBE, respond, then send objects
-    // Keep a connection clone alive in outer scope so QUIC connection
-    // survives after the spawned task completes.
+    // Keep connection alive after the spawned task completes.
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         match event {
@@ -202,34 +189,9 @@ async fn object_forwarding() {
                 req.accept(&ok).await.unwrap();
 
                 // Send a subgroup with 2 objects
-                let mut uni = pub_conn.open_uni().await.unwrap();
-                let header = SubgroupHeader {
-                    track_alias: 1,
-                    group_id: 0,
-                    has_properties: false,
-                    end_of_group: true,
-                    subgroup_id: None,
-                    publisher_priority: None,
-                };
-                let mut data = Vec::new();
-                header.encode(&mut data);
-
-                let obj0 = ObjectHeader {
-                    object_id_delta: 0,
-                    payload_length: 5,
-                };
-                obj0.encode(&mut data);
-                data.extend_from_slice(b"hello");
-
-                let obj1 = ObjectHeader {
-                    object_id_delta: 0,
-                    payload_length: 5,
-                };
-                obj1.encode(&mut data);
-                data.extend_from_slice(b"world");
-
-                uni.write_all(&data).await.unwrap();
-                uni.finish().unwrap();
+                let mut group = pub_session.open_group(1, 0).await.unwrap();
+                group.write_object(b"hello").await.unwrap();
+                group.write_object(b"world").await.unwrap();
             }
             _ => panic!("expected Subscribe event"),
         }
@@ -237,7 +199,6 @@ async fn object_forwarding() {
 
     // Subscriber setup
     let sub_session = connect_client(addr, cert_der).await;
-    let sub_conn = sub_session.connection().clone();
     let _subscription = sub_session
         .subscribe(
             TrackNamespace::from(["example"].as_slice()),
@@ -252,35 +213,20 @@ async fn object_forwarding() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Read forwarded objects on subscriber
-    let mut uni_recv = sub_conn.accept_uni().await.unwrap();
-    let mut all_data = Vec::new();
-    let mut tmp = vec![0u8; 4096];
-    loop {
-        match uni_recv.read(&mut tmp).await {
-            Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-            Ok(None) => break,
-            Err(e) => panic!("read error: {e}"),
+    let event = sub_session.next_event().await.unwrap();
+    match event {
+        SessionEvent::DataStream(mut group) => {
+            assert_eq!(group.track_alias(), 1);
+            assert_eq!(group.group_id(), 0);
+
+            let payload0 = group.read_object().await.unwrap().unwrap();
+            assert_eq!(payload0, b"hello");
+
+            let payload1 = group.read_object().await.unwrap().unwrap();
+            assert_eq!(payload1, b"world");
         }
+        _ => panic!("expected DataStream event"),
     }
-
-    // Decode and verify
-    let mut data_slice = all_data.as_slice();
-    let header = SubgroupHeader::decode(&mut data_slice).unwrap();
-    assert_eq!(header.track_alias, 1);
-    assert_eq!(header.group_id, 0);
-
-    let obj0 = ObjectHeader::decode(&mut data_slice, false).unwrap();
-    assert_eq!(obj0.object_id_delta, 0);
-    assert_eq!(obj0.payload_length, 5);
-    let payload0 = &data_slice[..5];
-    data_slice = &data_slice[5..];
-    assert_eq!(payload0, b"hello");
-
-    let obj1 = ObjectHeader::decode(&mut data_slice, false).unwrap();
-    assert_eq!(obj1.object_id_delta, 0);
-    assert_eq!(obj1.payload_length, 5);
-    let payload1 = &data_slice[..5];
-    assert_eq!(payload1, b"world");
 }
 
 /// 6.2: PUBLISH_DONE forwarding through Relay
@@ -301,7 +247,6 @@ async fn publish_done_forwarding() {
 
     // Publisher: accept SUBSCRIBE, respond, send object, then PUBLISH_DONE
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         match event {
@@ -314,25 +259,9 @@ async fn publish_done_forwarding() {
                 req.accept(&ok).await.unwrap();
 
                 // Send one object
-                let mut uni = pub_conn.open_uni().await.unwrap();
-                let header = SubgroupHeader {
-                    track_alias: 1,
-                    group_id: 0,
-                    has_properties: false,
-                    end_of_group: true,
-                    subgroup_id: None,
-                    publisher_priority: None,
-                };
-                let mut data = Vec::new();
-                header.encode(&mut data);
-                let obj = ObjectHeader {
-                    object_id_delta: 0,
-                    payload_length: 4,
-                };
-                obj.encode(&mut data);
-                data.extend_from_slice(b"done");
-                uni.write_all(&data).await.unwrap();
-                uni.finish().unwrap();
+                let mut group = pub_session.open_group(1, 0).await.unwrap();
+                group.write_object(b"done").await.unwrap();
+                group.finish().unwrap();
 
                 // Send PUBLISH_DONE on the bidi stream
                 let done = PublishDoneMessage {
@@ -378,7 +307,6 @@ async fn multiple_groups() {
 
     // Publisher: accept SUBSCRIBE, send 3 groups with 2 objects each
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         match event {
@@ -391,29 +319,11 @@ async fn multiple_groups() {
                 req.accept(&ok).await.unwrap();
 
                 for group_id in 0u64..3 {
-                    let mut uni = pub_conn.open_uni().await.unwrap();
-                    let header = SubgroupHeader {
-                        track_alias: 1,
-                        group_id,
-                        has_properties: false,
-                        end_of_group: true,
-                        subgroup_id: None,
-                        publisher_priority: None,
-                    };
-                    let mut data = Vec::new();
-                    header.encode(&mut data);
-
+                    let mut group = pub_session.open_group(1, group_id).await.unwrap();
                     for obj_id in 0u64..2 {
                         let payload = format!("g{group_id}o{obj_id}");
-                        let obj = ObjectHeader {
-                            object_id_delta: 0,
-                            payload_length: payload.len() as u64,
-                        };
-                        obj.encode(&mut data);
-                        data.extend_from_slice(payload.as_bytes());
+                        group.write_object(payload.as_bytes()).await.unwrap();
                     }
-                    uni.write_all(&data).await.unwrap();
-                    uni.finish().unwrap();
                 }
 
                 // PUBLISH_DONE
@@ -430,7 +340,6 @@ async fn multiple_groups() {
 
     // Subscriber
     let sub_session = connect_client(addr, cert_der).await;
-    let sub_conn = sub_session.connection().clone();
     let mut subscription = sub_session
         .subscribe(
             TrackNamespace::from(["example"].as_slice()),
@@ -446,28 +355,18 @@ async fn multiple_groups() {
     // Receive 3 groups
     let mut received_groups: Vec<(u64, Vec<String>)> = Vec::new();
     for _ in 0..3 {
-        let mut uni_recv = sub_conn.accept_uni().await.unwrap();
-        let mut all_data = Vec::new();
-        let mut tmp = vec![0u8; 4096];
-        loop {
-            match uni_recv.read(&mut tmp).await {
-                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-                Ok(None) => break,
-                Err(e) => panic!("read error: {e}"),
+        let event = sub_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::DataStream(mut group) => {
+                let group_id = group.group_id();
+                let mut payloads = Vec::new();
+                while let Some(payload) = group.read_object().await.unwrap() {
+                    payloads.push(String::from_utf8(payload).unwrap());
+                }
+                received_groups.push((group_id, payloads));
             }
+            _ => panic!("expected DataStream event"),
         }
-        let mut data = all_data.as_slice();
-        let header = SubgroupHeader::decode(&mut data).unwrap();
-        let mut payloads = Vec::new();
-        while !data.is_empty() {
-            let obj = ObjectHeader::decode(&mut data, false).unwrap();
-            let payload = std::str::from_utf8(&data[..obj.payload_length as usize])
-                .unwrap()
-                .to_string();
-            data = &data[obj.payload_length as usize..];
-            payloads.push(payload);
-        }
-        received_groups.push((header.group_id, payloads));
     }
 
     // Sort by group_id (streams may arrive out of order)
@@ -508,7 +407,6 @@ async fn late_join() {
 
     // Publisher: accept SUBSCRIBE (will come later), respond, send objects
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         match event {
@@ -522,28 +420,9 @@ async fn late_join() {
 
                 // Send 2 groups after subscriber joins
                 for group_id in 0u64..2 {
-                    let mut uni = pub_conn.open_uni().await.unwrap();
-                    let header = SubgroupHeader {
-                        track_alias: 1,
-                        group_id,
-                        has_properties: false,
-                        end_of_group: true,
-                        subgroup_id: None,
-                        publisher_priority: None,
-                    };
-                    let mut data = Vec::new();
-                    header.encode(&mut data);
-
+                    let mut group = pub_session.open_group(1, group_id).await.unwrap();
                     let payload = format!("late-g{group_id}");
-                    let obj = ObjectHeader {
-                        object_id_delta: 0,
-                        payload_length: payload.len() as u64,
-                    };
-                    obj.encode(&mut data);
-                    data.extend_from_slice(payload.as_bytes());
-
-                    uni.write_all(&data).await.unwrap();
-                    uni.finish().unwrap();
+                    group.write_object(payload.as_bytes()).await.unwrap();
                 }
 
                 let done = PublishDoneMessage {
@@ -561,7 +440,6 @@ async fn late_join() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let sub_session = connect_client(addr, cert_der).await;
-    let sub_conn = sub_session.connection().clone();
     let _subscription = sub_session
         .subscribe(
             TrackNamespace::from(["example"].as_slice()),
@@ -577,24 +455,17 @@ async fn late_join() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Should receive objects sent after subscription
-    let mut uni_recv = sub_conn.accept_uni().await.unwrap();
-    let mut all_data = Vec::new();
-    let mut tmp = vec![0u8; 4096];
-    loop {
-        match uni_recv.read(&mut tmp).await {
-            Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-            Ok(None) => break,
-            Err(e) => panic!("read error: {e}"),
-        }
-    }
-    let mut data = all_data.as_slice();
-    let header = SubgroupHeader::decode(&mut data).unwrap();
-    // Should receive at least the first group
-    assert_eq!(header.track_alias, 1);
+    let event = sub_session.next_event().await.unwrap();
+    match event {
+        SessionEvent::DataStream(mut group) => {
+            assert_eq!(group.track_alias(), 1);
 
-    let obj = ObjectHeader::decode(&mut data, false).unwrap();
-    let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap();
-    assert!(payload.starts_with("late-g"));
+            let payload = group.read_object().await.unwrap().unwrap();
+            let payload_str = std::str::from_utf8(&payload).unwrap();
+            assert!(payload_str.starts_with("late-g"));
+        }
+        _ => panic!("expected DataStream event"),
+    }
 }
 
 /// 3.1: ALPN mismatch -- connection should fail
@@ -675,10 +546,7 @@ async fn multiple_subscribers() {
 
     // Publisher: accept 1 SUBSCRIBE (aggregation means only one arrives),
     // send objects, then PUBLISH_DONE.
-    // Keep the connection alive after the publisher task completes so
-    // the relay can finish processing (recv_publish_done, data forwarding).
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         let mut req = match event {
@@ -696,25 +564,9 @@ async fn multiple_subscribers() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Send 1 group with 1 object
-        let mut uni = pub_conn.open_uni().await.unwrap();
-        let header = SubgroupHeader {
-            track_alias: 1,
-            group_id: 0,
-            has_properties: false,
-            end_of_group: true,
-            subgroup_id: None,
-            publisher_priority: None,
-        };
-        let mut data = Vec::new();
-        header.encode(&mut data);
-        let obj = ObjectHeader {
-            object_id_delta: 0,
-            payload_length: 6,
-        };
-        obj.encode(&mut data);
-        data.extend_from_slice(b"shared");
-        uni.write_all(&data).await.unwrap();
-        uni.finish().unwrap();
+        let mut group = pub_session.open_group(1, 0).await.unwrap();
+        group.write_object(b"shared").await.unwrap();
+        group.finish().unwrap();
 
         let done = PublishDoneMessage {
             status_code: STATUS_TRACK_ENDED,
@@ -730,7 +582,6 @@ async fn multiple_subscribers() {
         cert_der: rustls_pki_types::CertificateDer<'static>,
     ) -> Vec<u8> {
         let session = connect_client(addr, cert_der).await;
-        let conn = session.connection().clone();
         let _subscription = session
             .subscribe(
                 TrackNamespace::from(["example"].as_slice()),
@@ -743,21 +594,11 @@ async fn multiple_subscribers() {
         // Wait for objects
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-        let mut uni_recv = conn.accept_uni().await.unwrap();
-        let mut all_data = Vec::new();
-        let mut tmp = vec![0u8; 4096];
-        loop {
-            match uni_recv.read(&mut tmp).await {
-                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-                Ok(None) => break,
-                Err(e) => panic!("read error: {e}"),
-            }
+        let event = session.next_event().await.unwrap();
+        match event {
+            SessionEvent::DataStream(mut group) => group.read_object().await.unwrap().unwrap(),
+            _ => panic!("expected DataStream event"),
         }
-        // Extract payload
-        let mut data = all_data.as_slice();
-        let _header = SubgroupHeader::decode(&mut data).unwrap();
-        let obj = ObjectHeader::decode(&mut data, false).unwrap();
-        data[..obj.payload_length as usize].to_vec()
     }
 
     // Two subscribers connect concurrently.
@@ -790,7 +631,6 @@ async fn multiple_tracks() {
 
     // Publisher: accept 2 SUBSCRIBEs (video + audio), send objects on each
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         // Accept SUBSCRIBE for video (alias=1)
         let event_v = pub_session.next_event().await.unwrap();
@@ -821,46 +661,12 @@ async fn multiple_tracks() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Send video object
-        let mut uni_v = pub_conn.open_uni().await.unwrap();
-        let mut data_v = Vec::new();
-        SubgroupHeader {
-            track_alias: 1,
-            group_id: 0,
-            has_properties: false,
-            end_of_group: true,
-            subgroup_id: None,
-            publisher_priority: None,
-        }
-        .encode(&mut data_v);
-        ObjectHeader {
-            object_id_delta: 0,
-            payload_length: 5,
-        }
-        .encode(&mut data_v);
-        data_v.extend_from_slice(b"video");
-        uni_v.write_all(&data_v).await.unwrap();
-        uni_v.finish().unwrap();
+        let mut group_v = pub_session.open_group(1, 0).await.unwrap();
+        group_v.write_object(b"video").await.unwrap();
 
         // Send audio object
-        let mut uni_a = pub_conn.open_uni().await.unwrap();
-        let mut data_a = Vec::new();
-        SubgroupHeader {
-            track_alias: 2,
-            group_id: 0,
-            has_properties: false,
-            end_of_group: true,
-            subgroup_id: None,
-            publisher_priority: None,
-        }
-        .encode(&mut data_a);
-        ObjectHeader {
-            object_id_delta: 0,
-            payload_length: 5,
-        }
-        .encode(&mut data_a);
-        data_a.extend_from_slice(b"audio");
-        uni_a.write_all(&data_a).await.unwrap();
-        uni_a.finish().unwrap();
+        let mut group_a = pub_session.open_group(2, 0).await.unwrap();
+        group_a.write_object(b"audio").await.unwrap();
 
         // PUBLISH_DONE on both
         let done = PublishDoneMessage {
@@ -874,7 +680,6 @@ async fn multiple_tracks() {
 
     // Subscriber: subscribe to both tracks
     let sub_session = connect_client(addr, cert_der).await;
-    let sub_conn = sub_session.connection().clone();
 
     // Subscribe to video
     let _sub_v = sub_session
@@ -902,21 +707,14 @@ async fn multiple_tracks() {
     // Receive 2 uni streams (video + audio, order may vary)
     let mut payloads: Vec<String> = Vec::new();
     for _ in 0..2 {
-        let mut uni_recv = sub_conn.accept_uni().await.unwrap();
-        let mut all_data = Vec::new();
-        let mut tmp = vec![0u8; 4096];
-        loop {
-            match uni_recv.read(&mut tmp).await {
-                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-                Ok(None) => break,
-                Err(e) => panic!("read error: {e}"),
+        let event = sub_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::DataStream(mut group) => {
+                let payload = group.read_object().await.unwrap().unwrap();
+                payloads.push(String::from_utf8(payload).unwrap());
             }
+            _ => panic!("expected DataStream event"),
         }
-        let mut data = all_data.as_slice();
-        let _header = SubgroupHeader::decode(&mut data).unwrap();
-        let obj = ObjectHeader::decode(&mut data, false).unwrap();
-        let payload = std::str::from_utf8(&data[..obj.payload_length as usize]).unwrap();
-        payloads.push(payload.to_string());
     }
 
     payloads.sort();
@@ -940,7 +738,6 @@ async fn subscription_aggregation() {
     publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept exactly 1 SUBSCRIBE, send data, then PUBLISH_DONE
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         let mut req = match event {
@@ -958,25 +755,9 @@ async fn subscription_aggregation() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Send 1 group with 1 object
-        let mut uni = pub_conn.open_uni().await.unwrap();
-        let mut data = Vec::new();
-        SubgroupHeader {
-            track_alias: 1,
-            group_id: 0,
-            has_properties: false,
-            end_of_group: true,
-            subgroup_id: None,
-            publisher_priority: None,
-        }
-        .encode(&mut data);
-        ObjectHeader {
-            object_id_delta: 0,
-            payload_length: 4,
-        }
-        .encode(&mut data);
-        data.extend_from_slice(b"aggr");
-        uni.write_all(&data).await.unwrap();
-        uni.finish().unwrap();
+        let mut group = pub_session.open_group(1, 0).await.unwrap();
+        group.write_object(b"aggr").await.unwrap();
+        group.finish().unwrap();
 
         let done = PublishDoneMessage {
             status_code: STATUS_TRACK_ENDED,
@@ -999,7 +780,6 @@ async fn subscription_aggregation() {
 
     // Subscriber 1: subscribe and wait for SUBSCRIBE_OK
     let sub1_session = connect_client(addr, cert_der.clone()).await;
-    let sub1_conn = sub1_session.connection().clone();
     let _sub1 = sub1_session
         .subscribe(
             TrackNamespace::from(["example"].as_slice()),
@@ -1011,7 +791,6 @@ async fn subscription_aggregation() {
 
     // Subscriber 2: subscribe AFTER sub1 is established (triggers aggregation)
     let sub2_session = connect_client(addr, cert_der).await;
-    let sub2_conn = sub2_session.connection().clone();
     let _sub2 = sub2_session
         .subscribe(
             TrackNamespace::from(["example"].as_slice()),
@@ -1023,37 +802,19 @@ async fn subscription_aggregation() {
 
     // Both subscribers receive data
     let recv1 = tokio::spawn(async move {
-        let mut uni_recv = sub1_conn.accept_uni().await.unwrap();
-        let mut all_data = Vec::new();
-        let mut tmp = vec![0u8; 4096];
-        loop {
-            match uni_recv.read(&mut tmp).await {
-                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-                Ok(None) => break,
-                Err(e) => panic!("read error: {e}"),
-            }
+        let event = sub1_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::DataStream(mut group) => group.read_object().await.unwrap().unwrap(),
+            _ => panic!("expected DataStream event"),
         }
-        let mut slice = all_data.as_slice();
-        let _header = SubgroupHeader::decode(&mut slice).unwrap();
-        let obj = ObjectHeader::decode(&mut slice, false).unwrap();
-        slice[..obj.payload_length as usize].to_vec()
     });
 
     let recv2 = tokio::spawn(async move {
-        let mut uni_recv = sub2_conn.accept_uni().await.unwrap();
-        let mut all_data = Vec::new();
-        let mut tmp = vec![0u8; 4096];
-        loop {
-            match uni_recv.read(&mut tmp).await {
-                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
-                Ok(None) => break,
-                Err(e) => panic!("read error: {e}"),
-            }
+        let event = sub2_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::DataStream(mut group) => group.read_object().await.unwrap().unwrap(),
+            _ => panic!("expected DataStream event"),
         }
-        let mut slice = all_data.as_slice();
-        let _header = SubgroupHeader::decode(&mut slice).unwrap();
-        let obj = ObjectHeader::decode(&mut slice, false).unwrap();
-        slice[..obj.payload_length as usize].to_vec()
     });
 
     pub_handle.await.unwrap();
@@ -1080,7 +841,6 @@ async fn subscriber_disconnect() {
 
     // Publisher: accept SUBSCRIBE, respond, send objects continuously
     let _pub_conn_keepalive = pub_session.connection().clone();
-    let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
         let event = pub_session.next_event().await.unwrap();
         match event {
@@ -1094,31 +854,15 @@ async fn subscriber_disconnect() {
 
                 // Send a few groups
                 for group_id in 0u64..3 {
-                    let mut uni = pub_conn.open_uni().await.unwrap();
-                    let mut data = Vec::new();
-                    SubgroupHeader {
-                        track_alias: 1,
-                        group_id,
-                        has_properties: false,
-                        end_of_group: true,
-                        subgroup_id: None,
-                        publisher_priority: None,
-                    }
-                    .encode(&mut data);
-                    ObjectHeader {
-                        object_id_delta: 0,
-                        payload_length: 4,
-                    }
-                    .encode(&mut data);
-                    data.extend_from_slice(b"data");
-                    uni.write_all(&data).await.unwrap();
-                    uni.finish().unwrap();
+                    let mut group = pub_session.open_group(1, group_id).await.unwrap();
+                    group.write_object(b"data").await.unwrap();
+                    group.finish().unwrap();
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
 
                 // Publisher connection should still be alive
                 assert!(
-                    pub_conn.close_reason().is_none(),
+                    pub_session.connection().close_reason().is_none(),
                     "publisher should still be connected"
                 );
             }
@@ -1129,7 +873,6 @@ async fn subscriber_disconnect() {
     // Subscriber connects, subscribes, receives 1 group, then disconnects
     {
         let sub_session = connect_client(addr, cert_der).await;
-        let sub_conn = sub_session.connection().clone();
         let _subscription = sub_session
             .subscribe(
                 TrackNamespace::from(["example"].as_slice()),
@@ -1140,12 +883,16 @@ async fn subscriber_disconnect() {
             .unwrap();
 
         // Receive at least 1 object
-        let mut uni_recv = sub_conn.accept_uni().await.unwrap();
-        let mut tmp = vec![0u8; 4096];
-        let _ = uni_recv.read(&mut tmp).await.unwrap();
+        let event = sub_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::DataStream(mut group) => {
+                let _ = group.read_object().await.unwrap();
+            }
+            _ => panic!("expected DataStream event"),
+        }
 
         // Disconnect subscriber
-        sub_conn.close(0u32.into(), b"done");
+        sub_session.connection().close(0u32.into(), b"done");
     }
 
     // Publisher should complete without error
