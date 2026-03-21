@@ -304,10 +304,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "moqt-core",
- "quinn",
- "rcgen",
  "rustls",
- "rustls-pki-types",
  "tokio",
 ]
 
@@ -330,10 +327,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "moqt-core",
- "quinn",
- "rcgen",
  "rustls",
- "rustls-pki-types",
  "tokio",
 ]
 

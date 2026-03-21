@@ -9,6 +9,7 @@
 //! - `data`: サブグループヘッダーやオブジェクトなど、メディアデータストリーム用の型
 //! - `session`: QUIC セッション管理（コントロールストリーム、リクエストID 割り当て、QUIC設定）
 
+pub mod client;
 pub mod data;
 pub mod message;
 pub mod primitives;
