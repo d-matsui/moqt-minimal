@@ -17,8 +17,8 @@ use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 use moqt_core::quic_config;
+use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 
 /// Helper: generate self-signed cert and return (cert_der, key_der)
 fn gen_cert() -> (
@@ -113,11 +113,7 @@ async fn publish_namespace_registration() {
     let pub_session = connect_client(addr, cert_der).await;
 
     // Send PUBLISH_NAMESPACE
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
     // If we get here, registration succeeded
 }
 
@@ -136,11 +132,7 @@ async fn subscribe_via_relay() {
 
     // Publisher connects and registers namespace
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Keep publisher connection alive for the duration of the test
     let _pub_conn = pub_session.connection().clone();
@@ -191,11 +183,7 @@ async fn object_forwarding() {
 
     // Publisher setup
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept SUBSCRIBE, respond, then send objects
     // Keep a connection clone alive in outer scope so QUIC connection
@@ -309,11 +297,7 @@ async fn publish_done_forwarding() {
 
     // Publisher setup
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept SUBSCRIBE, respond, send object, then PUBLISH_DONE
     let _pub_conn_keepalive = pub_session.connection().clone();
@@ -390,11 +374,7 @@ async fn multiple_groups() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept SUBSCRIBE, send 3 groups with 2 objects each
     let _pub_conn_keepalive = pub_session.connection().clone();
@@ -524,11 +504,7 @@ async fn late_join() {
 
     // Publisher connects first and registers
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept SUBSCRIBE (will come later), respond, send objects
     let _pub_conn_keepalive = pub_session.connection().clone();
@@ -695,19 +671,17 @@ async fn multiple_subscribers() {
 
     // Publisher setup
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
-    // Publisher: accept 2 SUBSCRIBE (one per subscriber), respond to each, then send objects
+    // Publisher: accept 1 SUBSCRIBE (aggregation means only one arrives),
+    // send objects, then PUBLISH_DONE.
+    // Keep the connection alive after the publisher task completes so
+    // the relay can finish processing (recv_publish_done, data forwarding).
     let _pub_conn_keepalive = pub_session.connection().clone();
     let pub_conn = pub_session.connection().clone();
     let pub_handle = tokio::spawn(async move {
-        // Accept first SUBSCRIBE
-        let event1 = pub_session.next_event().await.unwrap();
-        let mut req1 = match event1 {
+        let event = pub_session.next_event().await.unwrap();
+        let mut req = match event {
             SessionEvent::Subscribe(req) => req,
             _ => panic!("expected Subscribe event"),
         };
@@ -716,18 +690,10 @@ async fn multiple_subscribers() {
             parameters: vec![],
             track_properties_raw: vec![],
         };
-        req1.accept(&ok).await.unwrap();
+        req.accept(&ok).await.unwrap();
 
-        // Accept second SUBSCRIBE
-        let event2 = pub_session.next_event().await.unwrap();
-        let mut req2 = match event2 {
-            SessionEvent::Subscribe(req) => req,
-            _ => panic!("expected Subscribe event"),
-        };
-        req2.accept(&ok).await.unwrap();
-
-        // Small delay so both subscriptions are registered before sending
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Wait for both subscribers to be registered via aggregation
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Send 1 group with 1 object
         let mut uni = pub_conn.open_uni().await.unwrap();
@@ -750,14 +716,12 @@ async fn multiple_subscribers() {
         uni.write_all(&data).await.unwrap();
         uni.finish().unwrap();
 
-        // PUBLISH_DONE on both bidi streams
         let done = PublishDoneMessage {
             status_code: STATUS_TRACK_ENDED,
             stream_count: 1,
             reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
         };
-        req1.send_publish_done(&done).await.unwrap();
-        req2.send_publish_done(&done).await.unwrap();
+        req.send_publish_done(&done).await.unwrap();
     });
 
     // Helper to subscribe and receive objects
@@ -796,7 +760,8 @@ async fn multiple_subscribers() {
         data[..obj.payload_length as usize].to_vec()
     }
 
-    // Two subscribers connect concurrently
+    // Two subscribers connect concurrently.
+    // Per-track lock ensures only one SUBSCRIBE reaches the publisher.
     let sub1 = tokio::spawn(subscribe_and_receive(addr, cert_der.clone()));
     let sub2 = tokio::spawn(subscribe_and_receive(addr, cert_der));
 
@@ -821,11 +786,7 @@ async fn multiple_tracks() {
 
     // Publisher
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept 2 SUBSCRIBEs (video + audio), send objects on each
     let _pub_conn_keepalive = pub_session.connection().clone();
@@ -976,11 +937,7 @@ async fn subscription_aggregation() {
 
     // Publisher
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept exactly 1 SUBSCRIBE, send data, then PUBLISH_DONE
     let pub_conn = pub_session.connection().clone();
@@ -1034,7 +991,10 @@ async fn subscription_aggregation() {
             pub_session.next_event(),
         )
         .await;
-        assert!(result.is_err(), "publisher should NOT receive a second SUBSCRIBE");
+        assert!(
+            result.is_err(),
+            "publisher should NOT receive a second SUBSCRIBE"
+        );
     });
 
     // Subscriber 1: subscribe and wait for SUBSCRIBE_OK
@@ -1116,11 +1076,7 @@ async fn subscriber_disconnect() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let pub_session = connect_client(addr, cert_der.clone()).await;
-    publish_namespace(
-        &pub_session,
-        TrackNamespace::from(["example"].as_slice()),
-    )
-    .await;
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
 
     // Publisher: accept SUBSCRIBE, respond, send objects continuously
     let _pub_conn_keepalive = pub_session.connection().clone();

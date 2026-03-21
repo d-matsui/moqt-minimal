@@ -93,6 +93,10 @@ struct RelayState {
     sessions: HashMap<SessionId, Arc<MoqtSession>>,
     namespace_to_publisher: HashMap<TrackNamespace, SessionId>,
     subscriptions: HashMap<FullTrackName, Subscription>,
+    /// Per-track locks to serialize handle_subscribe for the same track.
+    /// Prevents duplicate upstream SUBSCRIBEs when multiple subscribers
+    /// request the same track concurrently.
+    track_locks: HashMap<FullTrackName, Arc<Mutex<()>>>,
 }
 
 impl RelayState {
@@ -202,6 +206,7 @@ impl Relay {
                 sessions: HashMap::new(),
                 namespace_to_publisher: HashMap::new(),
                 subscriptions: HashMap::new(),
+                track_locks: HashMap::new(),
             })),
         }
     }
@@ -382,6 +387,18 @@ async fn handle_subscribe(
         name: track_name_str.to_string(),
     };
 
+    // === Per-track serialization ===
+    // Acquire a per-track lock to prevent duplicate upstream SUBSCRIBEs
+    // when multiple subscribers request the same track concurrently.
+    let track_lock = state
+        .lock()
+        .await
+        .track_locks
+        .entry(track.clone())
+        .or_default()
+        .clone();
+    let track_guard = track_lock.lock().await;
+
     let new_subscriber = SubscriberEntry {
         session_id: subscriber_session,
         request: subscriber_request.clone(),
@@ -434,6 +451,10 @@ async fn handle_subscribe(
         subscription.subscribe_ok.clone(),
         new_subscriber,
     );
+
+    // Release the per-track lock now that the subscription is established.
+    // Other subscribers for this track can now proceed with aggregation.
+    drop(track_guard);
 
     // Forward SUBSCRIBE_OK to subscriber
     subscriber_request
