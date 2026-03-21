@@ -962,6 +962,149 @@ async fn multiple_tracks() {
     assert_eq!(payloads, vec!["audio", "video"]);
 }
 
+/// Subscription aggregation: second subscriber reuses the upstream subscription.
+/// The publisher should receive only ONE SUBSCRIBE, and both subscribers
+/// should receive the forwarded data.
+#[tokio::test]
+async fn subscription_aggregation() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher
+    let pub_session = connect_client(addr, cert_der.clone()).await;
+    publish_namespace(
+        &pub_session,
+        TrackNamespace::from(["example"].as_slice()),
+    )
+    .await;
+
+    // Publisher: accept exactly 1 SUBSCRIBE, send data, then PUBLISH_DONE
+    let pub_conn = pub_session.connection().clone();
+    let pub_handle = tokio::spawn(async move {
+        let event = pub_session.next_event().await.unwrap();
+        let mut req = match event {
+            SessionEvent::Subscribe(req) => req,
+            _ => panic!("expected Subscribe event"),
+        };
+        let ok = SubscribeOkMessage {
+            track_alias: 1,
+            parameters: vec![],
+            track_properties_raw: vec![],
+        };
+        req.accept(&ok).await.unwrap();
+
+        // Wait for both subscribers to be registered
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Send 1 group with 1 object
+        let mut uni = pub_conn.open_uni().await.unwrap();
+        let mut data = Vec::new();
+        SubgroupHeader {
+            track_alias: 1,
+            group_id: 0,
+            has_properties: false,
+            end_of_group: true,
+            subgroup_id: None,
+            publisher_priority: None,
+        }
+        .encode(&mut data);
+        ObjectHeader {
+            object_id_delta: 0,
+            payload_length: 4,
+        }
+        .encode(&mut data);
+        data.extend_from_slice(b"aggr");
+        uni.write_all(&data).await.unwrap();
+        uni.finish().unwrap();
+
+        let done = PublishDoneMessage {
+            status_code: STATUS_TRACK_ENDED,
+            stream_count: 1,
+            reason_phrase: moqt_core::primitives::reason_phrase::ReasonPhrase::from(""),
+        };
+        req.send_publish_done(&done).await.unwrap();
+
+        // Verify no second SUBSCRIBE arrives (would timeout)
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            pub_session.next_event(),
+        )
+        .await;
+        assert!(result.is_err(), "publisher should NOT receive a second SUBSCRIBE");
+    });
+
+    // Subscriber 1: subscribe and wait for SUBSCRIBE_OK
+    let sub1_session = connect_client(addr, cert_der.clone()).await;
+    let sub1_conn = sub1_session.connection().clone();
+    let _sub1 = sub1_session
+        .subscribe(
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Subscriber 2: subscribe AFTER sub1 is established (triggers aggregation)
+    let sub2_session = connect_client(addr, cert_der).await;
+    let sub2_conn = sub2_session.connection().clone();
+    let _sub2 = sub2_session
+        .subscribe(
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Both subscribers receive data
+    let recv1 = tokio::spawn(async move {
+        let mut uni_recv = sub1_conn.accept_uni().await.unwrap();
+        let mut all_data = Vec::new();
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            match uni_recv.read(&mut tmp).await {
+                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
+                Ok(None) => break,
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        let mut slice = all_data.as_slice();
+        let _header = SubgroupHeader::decode(&mut slice).unwrap();
+        let obj = ObjectHeader::decode(&mut slice, false).unwrap();
+        slice[..obj.payload_length as usize].to_vec()
+    });
+
+    let recv2 = tokio::spawn(async move {
+        let mut uni_recv = sub2_conn.accept_uni().await.unwrap();
+        let mut all_data = Vec::new();
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            match uni_recv.read(&mut tmp).await {
+                Ok(Some(n)) => all_data.extend_from_slice(&tmp[..n]),
+                Ok(None) => break,
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        let mut slice = all_data.as_slice();
+        let _header = SubgroupHeader::decode(&mut slice).unwrap();
+        let obj = ObjectHeader::decode(&mut slice, false).unwrap();
+        slice[..obj.payload_length as usize].to_vec()
+    });
+
+    pub_handle.await.unwrap();
+
+    let payload1 = recv1.await.unwrap();
+    let payload2 = recv2.await.unwrap();
+
+    assert_eq!(payload1, b"aggr");
+    assert_eq!(payload2, b"aggr");
+}
+
 /// 6.3: Subscriber disconnect -- relay cleans up, publisher continues
 #[tokio::test]
 async fn subscriber_disconnect() {
