@@ -33,9 +33,16 @@ pub enum SessionEvent {
 
 /// A MOQT session over a QUIC connection.
 /// Created after SETUP exchange is complete.
+///
+/// Holds the two control streams (one per peer) for the session lifetime.
+/// Dropping the writer would send FIN, which is a protocol violation (Section 3.3).
 pub struct MoqtSession {
     connection: Connection,
     request_id_alloc: RequestIdAllocator,
+    /// Writer for this peer's control stream (must not be dropped).
+    _ctrl_writer: ControlStreamWriter,
+    /// Reader for the peer's control stream (for future GOAWAY reception).
+    _ctrl_reader: ControlStreamReader,
 }
 
 impl MoqtSession {
@@ -59,6 +66,8 @@ impl MoqtSession {
         Ok(Self {
             connection,
             request_id_alloc: RequestIdAllocator::client(),
+            _ctrl_writer: ctrl_writer,
+            _ctrl_reader: ctrl_reader,
         })
     }
 
@@ -79,6 +88,8 @@ impl MoqtSession {
         Ok(Self {
             connection,
             request_id_alloc: RequestIdAllocator::server(),
+            _ctrl_writer: ctrl_writer,
+            _ctrl_reader: ctrl_reader,
         })
     }
 
