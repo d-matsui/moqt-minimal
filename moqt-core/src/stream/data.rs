@@ -9,20 +9,20 @@
 //! being duplicated in each binary.
 
 use anyhow::Result;
+use web_transport_quinn::{RecvStream, SendStream};
 
 use crate::stream::read_varint;
-use crate::transport;
 use crate::wire::object::ObjectHeader;
 use crate::wire::subgroup_header::SubgroupHeader;
 
 /// Reads SubgroupHeader and Objects from a unidirectional data stream.
 pub struct DataStreamReader {
-    stream: Box<dyn transport::RecvStream>,
+    stream: RecvStream,
     has_properties: bool,
 }
 
 impl DataStreamReader {
-    pub fn new(stream: Box<dyn transport::RecvStream>) -> Self {
+    pub fn new(stream: RecvStream) -> Self {
         Self {
             stream,
             has_properties: false,
@@ -32,31 +32,25 @@ impl DataStreamReader {
     /// Read and validate a SubgroupHeader from the stream.
     /// Returns (parsed header, raw bytes) so callers can forward raw bytes
     /// while also inspecting the parsed structure.
-    ///
-    /// Reading flow:
-    /// 1. Read stream_type, track_alias, group_id varints
-    /// 2. Inspect stream_type bits to read optional fields
-    ///    (Subgroup ID if SUBGROUP_ID_MODE=10, Publisher Priority if DEFAULT_PRIORITY=0)
-    /// 3. Pass accumulated raw bytes to `SubgroupHeader::decode()` for validation
     pub async fn read_subgroup_header(&mut self) -> Result<(SubgroupHeader, Vec<u8>)> {
         let mut raw = Vec::new();
 
         // stream_type varint
-        let (stream_type, type_bytes) = read_varint(self.stream.as_mut()).await?;
+        let (stream_type, type_bytes) = read_varint(&mut self.stream).await?;
         raw.extend_from_slice(&type_bytes);
 
         // track_alias varint
-        let (_track_alias, alias_bytes) = read_varint(self.stream.as_mut()).await?;
+        let (_track_alias, alias_bytes) = read_varint(&mut self.stream).await?;
         raw.extend_from_slice(&alias_bytes);
 
         // group_id varint
-        let (_group_id, group_bytes) = read_varint(self.stream.as_mut()).await?;
+        let (_group_id, group_bytes) = read_varint(&mut self.stream).await?;
         raw.extend_from_slice(&group_bytes);
 
         // Optional Subgroup ID (SUBGROUP_ID_MODE bits 1-2 == 0b10)
         let subgroup_id_mode = (stream_type >> 1) & 0x03;
         if subgroup_id_mode == 0x02 {
-            let (_subgroup_id, subgroup_bytes) = read_varint(self.stream.as_mut()).await?;
+            let (_subgroup_id, subgroup_bytes) = read_varint(&mut self.stream).await?;
             raw.extend_from_slice(&subgroup_bytes);
         }
 
@@ -79,18 +73,16 @@ impl DataStreamReader {
     /// Read one Object from the stream.
     /// Returns `Ok(None)` on stream FIN (no more objects).
     /// Returns `Ok(Some((header, payload, raw_header_bytes)))` on success.
-    /// The raw_header_bytes contain the encoded ObjectHeader (and properties if present),
-    /// suitable for pass-through forwarding.
     pub async fn read_object(&mut self) -> Result<Option<(ObjectHeader, Vec<u8>, Vec<u8>)>> {
         let mut header_bytes = Vec::new();
 
         // Read object_id_delta; EOF means end of stream
-        let (object_id_delta, delta_bytes) = match read_varint(self.stream.as_mut()).await {
+        let (object_id_delta, delta_bytes) = match read_varint(&mut self.stream).await {
             Ok(v) => v,
             Err(e) => {
-                // Transport implementations convert EOF to io::ErrorKind::UnexpectedEof
-                if let Some(io_err) = e.downcast_ref::<std::io::Error>()
-                    && io_err.kind() == std::io::ErrorKind::UnexpectedEof
+                // ReadExactError::FinishedEarly indicates stream FIN
+                if e.downcast_ref::<web_transport_quinn::ReadExactError>()
+                    .is_some()
                 {
                     return Ok(None);
                 }
@@ -100,12 +92,12 @@ impl DataStreamReader {
         header_bytes.extend_from_slice(&delta_bytes);
 
         // Read payload_length
-        let (payload_length, len_bytes) = read_varint(self.stream.as_mut()).await?;
+        let (payload_length, len_bytes) = read_varint(&mut self.stream).await?;
         header_bytes.extend_from_slice(&len_bytes);
 
         // Skip Object Properties if PROPERTIES bit was set in SubgroupHeader
         if self.has_properties {
-            let (props_len, props_len_bytes) = read_varint(self.stream.as_mut()).await?;
+            let (props_len, props_len_bytes) = read_varint(&mut self.stream).await?;
             header_bytes.extend_from_slice(&props_len_bytes);
             if props_len > 0 {
                 let mut props = vec![0u8; props_len as usize];
@@ -131,11 +123,11 @@ impl DataStreamReader {
 
 /// Writes SubgroupHeader and Objects to a unidirectional data stream.
 pub struct DataStreamWriter {
-    stream: Box<dyn transport::SendStream>,
+    stream: SendStream,
 }
 
 impl DataStreamWriter {
-    pub fn new(stream: Box<dyn transport::SendStream>) -> Self {
+    pub fn new(stream: SendStream) -> Self {
         Self { stream }
     }
 

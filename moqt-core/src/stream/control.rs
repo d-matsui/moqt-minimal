@@ -7,17 +7,16 @@
 //! For per-request bidirectional streams, see `request`.
 
 use anyhow::Result;
-
-use crate::transport;
+use web_transport_quinn::{RecvStream, SendStream};
 
 /// Write side of a MOQT control stream.
 /// Corresponds to the unidirectional stream each peer opens.
 pub struct ControlStreamWriter {
-    stream: Box<dyn transport::SendStream>,
+    stream: SendStream,
 }
 
 impl ControlStreamWriter {
-    pub fn new(stream: Box<dyn transport::SendStream>) -> Self {
+    pub fn new(stream: SendStream) -> Self {
         Self { stream }
     }
 
@@ -39,11 +38,11 @@ impl ControlStreamWriter {
 
 /// Read side of a MOQT control stream.
 pub struct ControlStreamReader {
-    stream: Box<dyn transport::RecvStream>,
+    stream: RecvStream,
 }
 
 impl ControlStreamReader {
-    pub fn new(stream: Box<dyn transport::RecvStream>) -> Self {
+    pub fn new(stream: RecvStream) -> Self {
         Self { stream }
     }
 
@@ -58,6 +57,6 @@ impl ControlStreamReader {
     /// Read one control message from the stream, returning the full frame
     /// (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::stream::read_message_frame(self.stream.as_mut()).await
+        crate::stream::read_message_frame(&mut self.stream).await
     }
 }

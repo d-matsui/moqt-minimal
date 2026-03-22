@@ -75,7 +75,12 @@ async fn session_setup() {
     tokio::spawn(async move {
         if let Some(incoming) = ep.accept().await {
             let conn = incoming.await.unwrap();
-            let _session = MoqtSession::accept(conn).await.unwrap();
+            let wt_session = web_transport_quinn::Session::raw(
+                conn,
+                url::Url::parse("https://localhost").unwrap(),
+                web_transport_quinn::http::StatusCode::OK,
+            );
+            let _session = MoqtSession::accept(wt_session).await.unwrap();
         }
     });
 

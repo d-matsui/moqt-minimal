@@ -27,7 +27,6 @@ use crate::session::subscription::Subscription;
 use crate::stream::control::{ControlStreamReader, ControlStreamWriter};
 use crate::stream::data::{DataStreamReader, DataStreamWriter};
 use crate::stream::request::{RequestMessage, RequestStreamReader, RequestStreamWriter};
-use crate::transport;
 use crate::wire::parameter::MessageParameter;
 use crate::wire::publish_namespace::PublishNamespaceMessage;
 use crate::wire::setup::{SetupMessage, SetupOption};
@@ -91,7 +90,7 @@ pub enum SessionEvent {
 /// Holds the two control streams (one per peer) for the session lifetime.
 /// Dropping the writer would send FIN, which is a protocol violation (Section 3.3).
 pub struct MoqtSession {
-    connection: Box<dyn transport::Connection>,
+    session: web_transport_quinn::Session,
     request_id_alloc: RequestIdAllocator,
     /// Writer for this peer's control stream (must not be dropped).
     _ctrl_writer: ControlStreamWriter,
@@ -100,11 +99,10 @@ pub struct MoqtSession {
 }
 
 impl MoqtSession {
-    /// Create a MOQT session from a transport connection.
+    /// Create a MOQT session from a transport session.
     /// Performs the SETUP exchange (client side: sends Path + Authority options).
-    pub async fn connect(connection: impl transport::Connection + 'static) -> Result<Self> {
-        let connection: Box<dyn transport::Connection> = Box::new(connection);
-        let ctrl_send = connection.open_uni().await?;
+    pub async fn connect(session: web_transport_quinn::Session) -> Result<Self> {
+        let ctrl_send = session.open_uni().await?;
         let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
         let setup = SetupMessage {
             setup_options: vec![
@@ -114,35 +112,34 @@ impl MoqtSession {
         };
         ctrl_writer.write_setup(&setup).await?;
 
-        let recv = connection.accept_uni().await?;
+        let recv = session.accept_uni().await?;
         let mut ctrl_reader = ControlStreamReader::new(recv);
         let _server_setup = ctrl_reader.read_setup().await?;
 
         Ok(Self {
-            connection,
+            session,
             request_id_alloc: RequestIdAllocator::client(),
             _ctrl_writer: ctrl_writer,
             _ctrl_reader: ctrl_reader,
         })
     }
 
-    /// Accept a MOQT session from a transport connection.
+    /// Accept a MOQT session from a transport session.
     /// Performs the SETUP exchange (server side: sends empty SETUP).
-    pub async fn accept(connection: impl transport::Connection + 'static) -> Result<Self> {
-        let connection: Box<dyn transport::Connection> = Box::new(connection);
-        let ctrl_send = connection.open_uni().await?;
+    pub async fn accept(session: web_transport_quinn::Session) -> Result<Self> {
+        let ctrl_send = session.open_uni().await?;
         let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
         let setup = SetupMessage {
             setup_options: vec![],
         };
         ctrl_writer.write_setup(&setup).await?;
 
-        let recv = connection.accept_uni().await?;
+        let recv = session.accept_uni().await?;
         let mut ctrl_reader = ControlStreamReader::new(recv);
         let _client_setup = ctrl_reader.read_setup().await?;
 
         Ok(Self {
-            connection,
+            session,
             request_id_alloc: RequestIdAllocator::server(),
             _ctrl_writer: ctrl_writer,
             _ctrl_reader: ctrl_reader,
@@ -153,7 +150,7 @@ impl MoqtSession {
     /// Opens a bidi stream, sends PUBLISH_NAMESPACE, and waits for REQUEST_OK.
     /// Returns an error if the peer responds with REQUEST_ERROR.
     pub async fn publish_namespace(&self, namespace: TrackNamespace) -> Result<()> {
-        let (send, recv) = self.connection.open_bi().await?;
+        let (send, recv) = self.session.open_bi().await?;
         let mut writer = RequestStreamWriter::new(send);
         let mut reader = RequestStreamReader::new(recv);
 
@@ -186,7 +183,7 @@ impl MoqtSession {
         track_name: &str,
         parameters: Vec<MessageParameter>,
     ) -> Result<Subscription> {
-        let (send, recv) = self.connection.open_bi().await?;
+        let (send, recv) = self.session.open_bi().await?;
         let mut writer = RequestStreamWriter::new(send);
         let mut reader = RequestStreamReader::new(recv);
 
@@ -218,7 +215,7 @@ impl MoqtSession {
     /// so cancellation of the losing branch is safe (no data consumed).
     pub async fn next_event(&self) -> Result<SessionEvent> {
         tokio::select! {
-            bi = self.connection.accept_bi() => {
+            bi = self.session.accept_bi() => {
                 let (send, recv) = bi?;
                 let writer = RequestStreamWriter::new(send);
                 let mut reader = RequestStreamReader::new(recv);
@@ -235,7 +232,7 @@ impl MoqtSession {
                     _ => bail!("unexpected message on request stream"),
                 }
             }
-            uni = self.connection.accept_uni() => {
+            uni = self.session.accept_uni() => {
                 let recv = uni?;
                 let mut reader = DataStreamReader::new(recv);
                 let (header, _raw) = reader.read_subgroup_header().await?;
@@ -270,7 +267,7 @@ impl MoqtSession {
     /// for writing subsequent Objects.
     /// For low-level access (e.g. relay pass-through). Prefer `open_subgroup` for clients.
     pub async fn open_data_stream(&self, header: &SubgroupHeader) -> Result<DataStreamWriter> {
-        let uni = self.connection.open_uni().await?;
+        let uni = self.session.open_uni().await?;
         let mut writer = DataStreamWriter::new(uni);
         writer.write_subgroup_header(header).await?;
         Ok(writer)
@@ -278,7 +275,7 @@ impl MoqtSession {
 
     /// Close the session.
     pub fn close(&self) {
-        self.connection.close(0u32, b"done");
+        self.session.close(0u32, b"done");
     }
 }
 

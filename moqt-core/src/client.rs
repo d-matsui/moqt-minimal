@@ -34,7 +34,13 @@ pub async fn connect(addr: SocketAddr, server_name: &str, tls: TlsConfig) -> Res
     endpoint.set_default_client_config(client_config);
 
     let connection = endpoint.connect(addr, server_name)?.await?;
-    MoqtSession::connect(connection).await
+    let url: url::Url = format!("https://{addr}").parse()?;
+    let session = web_transport_quinn::Session::raw(
+        connection,
+        url,
+        web_transport_quinn::http::StatusCode::OK,
+    );
+    MoqtSession::connect(session).await
 }
 
 /// Create a QUIC client config that skips certificate verification.

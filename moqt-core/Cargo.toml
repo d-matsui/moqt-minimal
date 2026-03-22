@@ -9,3 +9,5 @@ quinn.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
+url.workspace = true
+web-transport-quinn.workspace = true

@@ -1,7 +1,7 @@
 //! # request: MOQT request stream reader/writer
 //!
 //! In MOQT, each request (SUBSCRIBE, PUBLISH_NAMESPACE, etc.) is carried on
-//! a dedicated bidirectional QUIC stream. This module provides reader/writer
+//! a dedicated bidirectional stream. This module provides reader/writer
 //! wrappers for those bidi streams.
 //!
 //! The frame format (varint type, u16 length, payload) is the same as control
@@ -10,8 +10,7 @@
 //! for the entire session.
 
 use anyhow::{Result, bail};
-
-use crate::transport;
+use web_transport_quinn::{RecvStream, SendStream};
 
 use crate::wire::publish_done::PublishDoneMessage;
 use crate::wire::publish_namespace::PublishNamespaceMessage;
@@ -66,11 +65,11 @@ pub fn parse_request_message(bytes: &[u8]) -> Result<RequestMessage> {
 
 /// Read side of a MOQT request stream (bidirectional).
 pub struct RequestStreamReader {
-    stream: Box<dyn transport::RecvStream>,
+    stream: RecvStream,
 }
 
 impl RequestStreamReader {
-    pub fn new(stream: Box<dyn transport::RecvStream>) -> Self {
+    pub fn new(stream: RecvStream) -> Self {
         Self { stream }
     }
 
@@ -82,17 +81,17 @@ impl RequestStreamReader {
 
     /// Read one message frame (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::stream::read_message_frame(self.stream.as_mut()).await
+        crate::stream::read_message_frame(&mut self.stream).await
     }
 }
 
 /// Write side of a MOQT request stream (bidirectional).
 pub struct RequestStreamWriter {
-    stream: Box<dyn transport::SendStream>,
+    stream: SendStream,
 }
 
 impl RequestStreamWriter {
-    pub fn new(stream: Box<dyn transport::SendStream>) -> Self {
+    pub fn new(stream: SendStream) -> Self {
         Self { stream }
     }
 

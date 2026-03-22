@@ -234,7 +234,13 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
     let connection = incoming.await?;
 
     // === SETUP exchange ===
-    let session = Arc::new(MoqtSession::accept(connection).await?);
+    let url = url::Url::parse("https://localhost").expect("static URL");
+    let wt_session = web_transport_quinn::Session::raw(
+        connection,
+        url,
+        web_transport_quinn::http::StatusCode::OK,
+    );
+    let session = Arc::new(MoqtSession::accept(wt_session).await?);
 
     let session_id = state.lock().await.register_session(session.clone());
 

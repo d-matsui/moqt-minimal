@@ -11,3 +11,5 @@ rustls.workspace = true
 rustls-pki-types.workspace = true
 rcgen.workspace = true
 tokio.workspace = true
+url.workspace = true
+web-transport-quinn.workspace = true
