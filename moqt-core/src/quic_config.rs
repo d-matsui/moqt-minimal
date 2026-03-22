@@ -10,9 +10,11 @@
 
 use std::sync::Arc;
 
-/// ALPN protocol identifier for MOQT draft-17.
-/// Used during TLS handshake for protocol negotiation.
-pub const ALPN: &[u8] = b"moqt-17";
+/// ALPN protocol identifier for MOQT draft-17 (raw QUIC).
+pub const ALPN_MOQT: &[u8] = b"moqt-17";
+
+/// ALPN protocol identifier for HTTP/3 (WebTransport).
+pub const ALPN_H3: &[u8] = b"h3";
 
 /// Create a QUIC server configuration with the given certificate and private key.
 /// Used by the relay server.
@@ -24,7 +26,7 @@ pub fn make_server_config(
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], key_der)
         .expect("failed to build server TLS config");
-    server_crypto.alpn_protocols = vec![ALPN.to_vec()];
+    server_crypto.alpn_protocols = vec![ALPN_MOQT.to_vec(), ALPN_H3.to_vec()];
 
     let quic_server_config =
         quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto).unwrap();
@@ -45,7 +47,7 @@ pub fn make_client_config(
     let mut client_crypto = rustls::ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
-    client_crypto.alpn_protocols = vec![ALPN.to_vec()];
+    client_crypto.alpn_protocols = vec![ALPN_MOQT.to_vec()];
 
     let quic_client_config =
         quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap();

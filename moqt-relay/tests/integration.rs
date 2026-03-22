@@ -819,3 +819,157 @@ async fn subscriber_disconnect() {
     // Publisher should complete without error
     pub_handle.await.unwrap();
 }
+
+// ============================================================
+// WebTransport tests
+// ============================================================
+
+/// Helper: connect a WebTransport client to the relay and do SETUP exchange.
+async fn connect_webtransport_client(
+    relay_addr: SocketAddr,
+    cert_der: rustls_pki_types::CertificateDer<'static>,
+) -> MoqtSession {
+    // Build a quinn client with h3 ALPN that trusts the self-signed cert
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.add(cert_der).unwrap();
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    client_crypto.alpn_protocols = vec![web_transport_quinn::ALPN.as_bytes().to_vec()];
+
+    let quic_client_config =
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap();
+    let client_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
+
+    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    endpoint.set_default_client_config(client_config);
+
+    // QUIC connect, then WebTransport (HTTP/3 CONNECT) handshake
+    let connection = endpoint
+        .connect(relay_addr, "localhost")
+        .unwrap()
+        .await
+        .expect("QUIC connect failed");
+    let url = url::Url::parse(&format!("https://localhost:{}", relay_addr.port())).unwrap();
+    let wt_session = web_transport_quinn::Session::connect(connection, url)
+        .await
+        .expect("WebTransport handshake failed");
+    MoqtSession::connect(wt_session)
+        .await
+        .expect("MOQT SETUP failed over WebTransport")
+}
+
+/// WebTransport: SETUP exchange succeeds
+#[tokio::test]
+async fn webtransport_session_setup() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let _session = connect_webtransport_client(addr, cert_der).await;
+    // If we get here, WebTransport SETUP exchange succeeded
+}
+
+/// WebTransport: end-to-end object forwarding (WT publisher -> relay -> WT subscriber)
+#[tokio::test]
+async fn webtransport_object_forwarding() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher (WebTransport)
+    let pub_session = Arc::new(connect_webtransport_client(addr, cert_der.clone()).await);
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
+
+    let _pub_keepalive = pub_session.clone();
+    let pub_handle = tokio::spawn(async move {
+        let event = pub_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::Subscribe(mut req) => {
+                req.accept(1).await.unwrap();
+                let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
+                group.write_object(b"hello-wt").await.unwrap();
+                group.write_object(b"world-wt").await.unwrap();
+            }
+            _ => panic!("expected Subscribe event"),
+        }
+    });
+
+    // Subscriber (WebTransport)
+    let sub_session = Arc::new(connect_webtransport_client(addr, cert_der).await);
+    let _subscription = sub_session
+        .subscribe(
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    match sub_session.next_event().await.unwrap() {
+        SessionEvent::DataStream(mut group) => {
+            let obj1 = group.read_object().await.unwrap().unwrap();
+            assert_eq!(obj1, b"hello-wt");
+            let obj2 = group.read_object().await.unwrap().unwrap();
+            assert_eq!(obj2, b"world-wt");
+        }
+        _ => panic!("expected DataStream event"),
+    }
+
+    pub_handle.await.unwrap();
+}
+
+/// Cross-transport: raw QUIC publisher -> relay -> WebTransport subscriber
+#[tokio::test]
+async fn cross_transport_quic_to_webtransport() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher (raw QUIC)
+    let pub_session = Arc::new(connect_client(addr, cert_der.clone()).await);
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
+
+    let _pub_keepalive = pub_session.clone();
+    let pub_handle = tokio::spawn(async move {
+        let event = pub_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::Subscribe(mut req) => {
+                req.accept(1).await.unwrap();
+                let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
+                group.write_object(b"cross-transport").await.unwrap();
+            }
+            _ => panic!("expected Subscribe event"),
+        }
+    });
+
+    // Subscriber (WebTransport)
+    let sub_session = Arc::new(connect_webtransport_client(addr, cert_der).await);
+    let _subscription = sub_session
+        .subscribe(
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    match sub_session.next_event().await.unwrap() {
+        SessionEvent::DataStream(mut group) => {
+            let obj = group.read_object().await.unwrap().unwrap();
+            assert_eq!(obj, b"cross-transport");
+        }
+        _ => panic!("expected DataStream event"),
+    }
+
+    pub_handle.await.unwrap();
+}

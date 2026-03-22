@@ -89,7 +89,7 @@ fn make_insecure_client_config() -> quinn::ClientConfig {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SkipVerification))
         .with_no_client_auth();
-    client_crypto.alpn_protocols = vec![quic_config::ALPN.to_vec()];
+    client_crypto.alpn_protocols = vec![quic_config::ALPN_MOQT.to_vec()];
 
     let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap();
     quinn::ClientConfig::new(Arc::new(quic_config))

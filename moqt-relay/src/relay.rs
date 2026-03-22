@@ -229,17 +229,34 @@ impl Relay {
 }
 
 /// Process a single QUIC connection (session).
-/// After the SETUP exchange, process bidi and uni streams concurrently.
+/// Detects the transport type via ALPN and performs the appropriate handshake:
+/// - `moqt-17`: raw QUIC (wrap with Session::raw)
+/// - `h3`: WebTransport (HTTP/3 CONNECT handshake via web_transport_quinn)
 async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayState>>) -> Result<()> {
     let connection = incoming.await?;
 
-    // === SETUP exchange ===
-    let url = url::Url::parse("https://localhost").expect("static URL");
-    let wt_session = web_transport_quinn::Session::raw(
-        connection,
-        url,
-        web_transport_quinn::http::StatusCode::OK,
-    );
+    // === Detect transport and create session ===
+    let alpn = connection
+        .handshake_data()
+        .and_then(|d| d.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+        .and_then(|d| d.protocol)
+        .unwrap_or_default();
+
+    let wt_session = if alpn.as_slice() == moqt_core::quic_config::ALPN_H3 {
+        // WebTransport: perform HTTP/3 + CONNECT handshake
+        let request = web_transport_quinn::Request::accept(connection).await?;
+        request.ok().await?
+    } else {
+        // Raw QUIC (moqt-17 or fallback)
+        let url = url::Url::parse("https://localhost").expect("static URL");
+        web_transport_quinn::Session::raw(
+            connection,
+            url,
+            web_transport_quinn::http::StatusCode::OK,
+        )
+    };
+
+    // === MOQT SETUP exchange ===
     let session = Arc::new(MoqtSession::accept(wt_session).await?);
 
     let session_id = state.lock().await.register_session(session.clone());
