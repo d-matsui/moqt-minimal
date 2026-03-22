@@ -12,13 +12,14 @@ let currentGroup: SubgroupWriter | null = null;
 let groupId = 0;
 let streamCount = 0;
 let groupStarted = false;
+let frameCount = 0;
 let mediaStream: MediaStream | null = null;
+const KEYFRAME_INTERVAL = 60; // Request keyframe every 60 frames (~2s at 30fps)
 
 async function start() {
-  const url = ($ ("relay-url") as HTMLInputElement).value;
-  const namespace = ($ ("namespace") as HTMLInputElement).value;
-  const trackName = ($ ("track-name") as HTMLInputElement).value;
-
+  const url = ($("relay-url") as HTMLInputElement).value;
+  const namespace = ($("namespace") as HTMLInputElement).value;
+  const trackName = ($("track-name") as HTMLInputElement).value;
   log("Connecting...");
   session = await MoqtSession.connect(url);
   log("Connected. SETUP complete.");
@@ -85,8 +86,9 @@ async function readFrames(
       frame.close();
       continue;
     }
-    const isKeyframe = groupId === 0 && !groupStarted;
-    encoder.encode(frame, { keyFrame: isKeyframe || groupId % 30 === 0 });
+    const requestKeyframe = frameCount % KEYFRAME_INTERVAL === 0;
+    encoder.encode(frame, { keyFrame: requestKeyframe });
+    frameCount++;
     frame.close();
   }
 }
@@ -144,6 +146,7 @@ async function stop() {
   ($("stop-btn") as HTMLButtonElement).disabled = true;
   log(`Stopped. Sent ${streamCount} groups.`);
 }
+
 
 function log(msg: string) {
   const el = $("log");

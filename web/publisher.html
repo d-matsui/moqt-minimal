@@ -18,7 +18,8 @@
   <div class="controls">
     <label>Relay: <input id="relay-url" value="https://localhost:4433"></label>
     <label>Namespace: <input id="namespace" value="example"></label>
-    <label>Track: <input id="track-name" value="video"></label>
+    <label>Track: <input id="track-name" value=""></label>
+    <script>document.getElementById('track-name').value = 'video-' + new Date().toTimeString().slice(0,5).replace(':','');</script>
   </div>
   <div class="controls">
     <button id="start-btn">Start</button>

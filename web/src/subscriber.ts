@@ -50,10 +50,13 @@ async function start() {
   receiveLoop();
 }
 
+// The currently active group reader. When a new group arrives,
+// the old one is abandoned (its remaining objects are discarded).
+let activeGroupId = -1;
+let activeAbort: AbortController | null = null;
+
 async function receiveLoop() {
   if (!session || !decoder) return;
-
-  let isFirstObjectInGroup = true;
 
   try {
     while (session) {
@@ -61,33 +64,72 @@ async function receiveLoop() {
       if (event.type !== "dataStream") continue;
 
       const group = event.reader;
-      log(`Group ${group.groupId} (alias=${group.trackAlias})`);
-      isFirstObjectInGroup = true;
 
-      let objectCount = 0;
-      while (true) {
-        const payload = await group.readObject();
-        if (payload === null) break;
+      // Skip if this group is older than the active one
+      if (group.groupId <= activeGroupId) continue;
 
-        if (decoder && decoder.state === "configured") {
-          // Determine frame type: first object in group = keyframe
-          const type = isFirstObjectInGroup ? "key" : "delta";
-          isFirstObjectInGroup = false;
-
-          const chunk = new EncodedVideoChunk({
-            type,
-            timestamp: performance.now() * 1000, // microseconds
-            data: payload,
-          });
-
-          decoder.decode(chunk);
-        }
-        objectCount++;
+      // Cancel the previous group reader
+      if (activeAbort) {
+        activeAbort.abort();
       }
-      log(`  ${objectCount} objects`);
+
+      activeGroupId = group.groupId;
+      const abort = new AbortController();
+      activeAbort = abort;
+
+      // Process this group in the background
+      processGroup(group, abort.signal);
     }
   } catch (e) {
     log(`Receive ended: ${e}`);
+  }
+}
+
+async function processGroup(group: SubgroupReader, signal: AbortSignal) {
+  log(`Group ${group.groupId} (alias=${group.trackAlias})`);
+
+  // Flush decoder to clear any frames from previous group
+  if (decoder && decoder.state === "configured") {
+    await decoder.flush();
+  }
+
+  let isFirstObject = true;
+  let objectCount = 0;
+
+  try {
+    while (!signal.aborted) {
+      const payload = await group.readObject();
+      if (payload === null) break;
+
+      if (signal.aborted) break;
+
+      if (decoder && decoder.state === "configured") {
+        const type = isFirstObject ? "key" : "delta";
+        isFirstObject = false;
+
+        const chunk = new EncodedVideoChunk({
+          type,
+          timestamp: performance.now() * 1000,
+          data: payload,
+        });
+
+        decoder.decode(chunk);
+      }
+      objectCount++;
+    }
+  } catch (e) {
+    if (!signal.aborted) {
+      log(`Group ${group.groupId} error: ${e}`);
+    }
+  } finally {
+    if (signal.aborted) {
+      // New group arrived, cancel this stream (sends STOP_SENDING)
+      await group.cancel().catch(() => {});
+    }
+  }
+
+  if (!signal.aborted) {
+    log(`  Group ${group.groupId}: ${objectCount} objects`);
   }
 }
 

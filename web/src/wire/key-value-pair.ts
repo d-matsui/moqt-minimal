@@ -10,9 +10,10 @@ export interface KeyValuePair {
   value: Uint8Array | number; // number for even types, bytes for odd types
 }
 
-/** Encode Key-Value-Pairs with delta encoding on type IDs. */
+/** Encode Key-Value-Pairs with delta encoding on type IDs.
+ * No count prefix — pairs are written until the end of the buffer.
+ */
 export function encodeKeyValuePairs(pairs: KeyValuePair[], buf: number[]): void {
-  buf.push(...encodeVarint(pairs.length));
   let prevType = 0;
   for (const pair of pairs) {
     const delta = pair.typeId - prevType;
@@ -31,18 +32,20 @@ export function encodeKeyValuePairs(pairs: KeyValuePair[], buf: number[]): void 
   }
 }
 
-/** Decode Key-Value-Pairs from a buffer. */
+/** Decode Key-Value-Pairs from a buffer until `end` offset.
+ * No count prefix — reads until the end of the buffer region.
+ */
 export function decodeKeyValuePairs(
   buf: Uint8Array,
-  offset: number
+  offset: number,
+  end?: number
 ): { pairs: KeyValuePair[]; bytesRead: number } {
   let pos = offset;
-  const { value: count, bytesRead: countLen } = decodeVarint(buf, pos);
-  pos += countLen;
+  const limit = end ?? buf.length;
 
   const pairs: KeyValuePair[] = [];
   let prevType = 0;
-  for (let i = 0; i < count; i++) {
+  while (pos < limit) {
     const { value: delta, bytesRead: deltaLen } = decodeVarint(buf, pos);
     pos += deltaLen;
     const typeId = prevType + delta;

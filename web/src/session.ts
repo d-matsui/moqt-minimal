@@ -43,12 +43,16 @@ import {
 } from "./wire/parameter.js";
 import { encodeVarint } from "./wire/varint.js";
 
+let openStreams = 0;
+
 /** A writable subgroup (data stream). */
 export class SubgroupWriter {
   private writer: WritableStreamDefaultWriter<Uint8Array>;
 
   constructor(writer: WritableStreamDefaultWriter<Uint8Array>) {
     this.writer = writer;
+    openStreams++;
+    console.log(`[stream] opened (${openStreams} open)`);
   }
 
   /** Write an object payload. ObjectHeader is generated internally. */
@@ -66,6 +70,8 @@ export class SubgroupWriter {
   /** Finish the stream (send FIN). */
   async finish(): Promise<void> {
     await this.writer.close();
+    openStreams--;
+    console.log(`[stream] closed (${openStreams} open)`);
   }
 }
 
@@ -85,6 +91,11 @@ export class SubgroupReader {
 
   get groupId(): number {
     return this.header.groupId;
+  }
+
+  /** Cancel the stream (sends STOP_SENDING). */
+  async cancel(): Promise<void> {
+    await this.reader.cancel();
   }
 
   /** Read the next object payload. Returns null on stream end. */
@@ -164,7 +175,10 @@ export class MoqtSession {
     this.transport = transport;
   }
 
-  /** Connect to a relay and perform SETUP exchange. */
+  /** Connect to a relay and perform SETUP exchange.
+   * @param certHash - SHA-256 hash of the server certificate (hex with colons, e.g. "ab:cd:...")
+   *                   Required for self-signed certificates.
+   */
   static async connect(url: string): Promise<MoqtSession> {
     const transport = new WebTransport(url);
     await transport.ready;
@@ -178,7 +192,8 @@ export class MoqtSession {
     // Send SETUP on a new unidirectional stream
     const sendStream = await this.transport.createUnidirectionalStream();
     const writer = sendStream.getWriter();
-    const setupMsg = clientSetup("/", "localhost");
+    // WebTransport: PATH/AUTHORITY are in the HTTP/3 CONNECT request, not SETUP
+    const setupMsg = { options: [] };
     await writer.write(encodeSetup(setupMsg));
     // Don't close the control stream (must stay open per spec)
 

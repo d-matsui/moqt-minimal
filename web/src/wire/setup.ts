@@ -6,9 +6,9 @@ import { encodeMessage, decodeMessage, MSG_SETUP } from "./message.js";
 import { encodeKeyValuePairs, decodeKeyValuePairs } from "./key-value-pair.js";
 import type { KeyValuePair } from "./key-value-pair.js";
 
-// Setup option type IDs
+// Setup option type IDs (must match Rust: setup.rs)
 export const SETUP_PATH = 0x01;       // odd = bytes
-export const SETUP_AUTHORITY = 0x02;   // even, but used as bytes in practice
+export const SETUP_AUTHORITY = 0x05;   // odd = bytes
 
 export interface SetupMessage {
   options: KeyValuePair[];

@@ -13,6 +13,11 @@ export class StreamReader {
     this.reader = readable.getReader();
   }
 
+  /** Cancel the underlying stream (sends STOP_SENDING to the peer). */
+  async cancel(): Promise<void> {
+    await this.reader.cancel();
+  }
+
   /** Read exactly `n` bytes. Throws on EOF before enough bytes. */
   async readExact(n: number): Promise<Uint8Array> {
     while (this.buffer.length < n) {
