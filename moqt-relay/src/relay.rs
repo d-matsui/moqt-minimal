@@ -183,8 +183,11 @@ impl RelayState {
     }
 
     /// Find an existing subscription for the same track (for aggregation).
-    fn find_existing_subscription(&self, track: &FullTrackName) -> Option<&Subscription> {
-        self.subscriptions.get(track)
+    fn find_existing_subscription_mut(
+        &mut self,
+        track: &FullTrackName,
+    ) -> Option<&mut Subscription> {
+        self.subscriptions.get_mut(track)
     }
 
     /// Find subscriber request handles for a given track (for PUBLISH_DONE forwarding).
@@ -316,27 +319,34 @@ async fn handle_data_stream(
             Err(e) => eprintln!("failed to open data stream to subscriber: {e}"),
         }
     }
-    let subscriber_writers = writers;
+    let mut active_writers = writers;
 
     // === Relay objects incrementally ===
     // Read objects one by one and immediately forward to all subscribers.
     // No buffering, so memory usage stays low even for large streams.
+    // Subscribers that fail a write are removed from the active list.
     while let Some((_obj, payload, obj_header_bytes)) = subgroup_reader.read_object_raw().await? {
-        // Forward immediately to all subscribers
-        // Continue forwarding to other subscribers even if an error occurs
-        for writer in &subscriber_writers {
+        let mut still_active = Vec::with_capacity(active_writers.len());
+        for writer in active_writers {
             let mut w = writer.lock().await;
-            let _ = w.write_raw(&obj_header_bytes).await;
-            let _ = w.write_raw(&payload).await;
+            if w.write_raw(&obj_header_bytes).await.is_ok() && w.write_raw(&payload).await.is_ok() {
+                drop(w);
+                still_active.push(writer);
+            } else {
+                eprintln!("subscriber write error, removing from relay");
+            }
         }
+        active_writers = still_active;
     }
 
     // === Propagate stream termination ===
     // When the publisher's stream ends,
     // send FIN to subscriber streams via finish()
-    for writer in subscriber_writers {
+    for writer in &active_writers {
         let mut w = writer.lock().await;
-        let _ = w.finish();
+        if let Err(e) = w.finish() {
+            eprintln!("subscriber finish error: {e}");
+        }
     }
 
     Ok(())
@@ -407,13 +417,9 @@ async fn handle_subscribe(
     // reuse it instead of sending a new SUBSCRIBE to the publisher.
     {
         let mut s = state.lock().await;
-        if let Some(existing) = s.find_existing_subscription(&track) {
+        if let Some(existing) = s.find_existing_subscription_mut(&track) {
             let ok = existing.subscribe_ok.clone();
-            s.subscriptions
-                .get_mut(&track)
-                .unwrap()
-                .subscribers
-                .push(new_subscriber);
+            existing.subscribers.push(new_subscriber);
             drop(s);
             subscriber_request
                 .lock()
