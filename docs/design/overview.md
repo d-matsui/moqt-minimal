@@ -2,13 +2,15 @@
 
 技術スタック: Rust + quinn (QUIC) + web-transport-quinn (WebTransport)
 
-## クレート構成
+## プロジェクト構成
 
 ```
 moqt-core/          # MOQT プロトコルの共通ロジック（ライブラリ）
 moqt-relay/          # Relay バイナリ
 moqt-pub/            # Publisher バイナリ（テスト/デモ用）
 moqt-sub/            # Subscriber バイナリ（テスト/デモ用）
+web/                 # ブラウザクライアント（TypeScript + WebTransport）
+scripts/             # 開発・テスト用スクリプト（dev.sh, e2e-video-test.sh）
 ```
 
 ## トランスポート
@@ -103,9 +105,42 @@ Publisher              Relay                Subscriber
 | SUBSCRIBE リクエスト | Bidirectional | Subscriber | SUBSCRIBE → SUBSCRIBE_OK/REQUEST_ERROR → PUBLISH_DONE |
 | Object 送信 | Unidirectional | Publisher | SUBGROUP_HEADER + Objects、Subgroup ごとに新しい stream |
 
+## web/（ブラウザクライアント）
+
+TypeScript で実装されたブラウザ向け MOQT クライアント。WebTransport API を使用して Relay に接続する。
+
+### 構成
+
+```
+web/src/
+├── wire/           # ワイヤフォーマットの encode/decode（Rust の wire/ と同等）
+│   ├── varint.ts, message.ts, parameter.ts, setup.ts, subscribe.ts,
+│   │   subscribe_ok.ts, publish_namespace.ts, request_ok.ts, publish_done.ts,
+│   │   subgroup_header.ts, object.ts, track-namespace.ts, key-value-pair.ts
+│   └── *.test.ts   # vitest によるテスト
+├── stream/
+│   └── stream-reader.ts  # ReadableStream からのフレーム読み取り
+├── session.ts      # MoqtSession（SETUP, イベントディスパッチ）
+├── publisher.ts    # カメラ映像の MOQT 配信
+└── subscriber.ts   # MOQT 映像の受信・再生
+```
+
+### HTML ページ
+
+- `web/index.html` — ランディングページ（Publisher/Subscriber へのリンク）
+- `web/publisher.html` — カメラキャプチャ → MOQT 配信
+- `web/subscriber.html` — MOQT 映像受信 → 再生
+
+### 開発
+
+```bash
+./scripts/dev.sh    # Relay + Vite 起動 + Chrome（自己署名証明書自動生成）
+cd web && npm run dev   # Vite のみ起動
+```
+
 ## テスト構成
 
-### 単体テスト（各モジュール内）
+### 単体テスト: Rust（各モジュール内）
 
 各ソースファイル内に `#[cfg(test)] mod tests` として記述。
 
@@ -125,6 +160,14 @@ moqt-core/src/wire/subgroup_header.rs → SUBGROUP_HEADER のテスト
 moqt-core/src/wire/object.rs          → Object fields のテスト
 ```
 
+### 単体テスト: TypeScript（vitest）
+
+```
+web/src/wire/varint.test.ts   → varint encode/decode テスト
+web/src/wire/message.test.ts  → メッセージ encode/decode テスト
+web/src/wire/wire.test.ts     → ワイヤフォーマット統合テスト
+```
+
 ### 結合テスト
 
 実際に QUIC / WebTransport 接続を行うテスト。
@@ -132,4 +175,10 @@ Publisher / Relay / Subscriber を同一プロセス内で起動し、localhost 
 
 ```
 moqt-relay/tests/integration.rs  → raw QUIC + WebTransport + cross-transport テスト
+```
+
+### E2E テスト
+
+```
+scripts/e2e-video-test.sh  → ffmpeg VP8/IVF → moqt-pub → relay → moqt-sub → ffplay
 ```
