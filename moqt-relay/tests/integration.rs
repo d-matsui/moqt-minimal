@@ -973,3 +973,52 @@ async fn cross_transport_quic_to_webtransport() {
 
     pub_handle.await.unwrap();
 }
+
+/// Cross-transport: WebTransport publisher -> relay -> raw QUIC subscriber
+#[tokio::test]
+async fn cross_transport_webtransport_to_quic() {
+    init_crypto();
+    let (endpoint, addr, cert_der) = start_relay().await;
+
+    let relay = moqt_relay::relay::Relay::new(endpoint);
+    tokio::spawn(async move { relay.run().await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Publisher (WebTransport)
+    let pub_session = Arc::new(connect_webtransport_client(addr, cert_der.clone()).await);
+    publish_namespace(&pub_session, TrackNamespace::from(["example"].as_slice())).await;
+
+    let _pub_keepalive = pub_session.clone();
+    let pub_handle = tokio::spawn(async move {
+        let event = pub_session.next_event().await.unwrap();
+        match event {
+            SessionEvent::Subscribe(mut req) => {
+                req.accept(1).await.unwrap();
+                let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
+                group.write_object(b"wt-to-quic").await.unwrap();
+            }
+            _ => panic!("expected Subscribe event"),
+        }
+    });
+
+    // Subscriber (raw QUIC)
+    let sub_session = Arc::new(connect_client(addr, cert_der).await);
+    let _subscription = sub_session
+        .subscribe(
+            TrackNamespace::from(["example"].as_slice()),
+            "video",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    match sub_session.next_event().await.unwrap() {
+        SessionEvent::DataStream(mut group) => {
+            let obj = group.read_object().await.unwrap().unwrap();
+            assert_eq!(obj, b"wt-to-quic");
+        }
+        _ => panic!("expected DataStream event"),
+    }
+
+    pub_handle.await.unwrap();
+}
