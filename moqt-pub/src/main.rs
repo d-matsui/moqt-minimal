@@ -28,9 +28,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use moqt_core::client::{self, TlsConfig};
-use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 use moqt_core::session::subgroup::SubgroupWriter;
+use moqt_core::session::{MoqtSession, SessionEvent};
+use moqt_core::wire::track_namespace::TrackNamespace;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

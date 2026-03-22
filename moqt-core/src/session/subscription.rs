@@ -5,9 +5,9 @@
 
 use anyhow::{Result, bail};
 
-use crate::message::publish_done::PublishDoneMessage;
-use crate::message::subscribe_ok::SubscribeOkMessage;
 use crate::stream::request::{RequestMessage, RequestStreamReader};
+use crate::wire::publish_done::PublishDoneMessage;
+use crate::wire::subscribe_ok::SubscribeOkMessage;
 
 /// An established subscription (subscriber side).
 /// Created by `MoqtSession::subscribe()` after receiving SUBSCRIBE_OK.

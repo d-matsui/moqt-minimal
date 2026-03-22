@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 
 use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
 use super::{MSG_SUBSCRIBE_OK, decode_message, encode_message};
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// SUBSCRIBE_OK message. Success response to a subscription.
 ///
@@ -77,7 +77,7 @@ impl SubscribeOkMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::parameter::MessageParameter;
+    use crate::wire::parameter::MessageParameter;
 
     fn roundtrip(msg: &SubscribeOkMessage) {
         let mut buf = Vec::new();

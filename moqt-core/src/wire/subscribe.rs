@@ -11,10 +11,10 @@ use anyhow::{Result, ensure};
 
 use super::parameter::{MessageParameter, decode_parameters, encode_parameters};
 use super::{MSG_SUBSCRIBE, decode_message, encode_message};
-use crate::primitives::track_namespace::{
+use crate::wire::track_namespace::{
     TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// SUBSCRIBE message. Requests subscription to a specific track.
 ///
@@ -85,7 +85,7 @@ impl SubscribeMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::parameter::SubscriptionFilter;
+    use crate::wire::parameter::SubscriptionFilter;
 
     fn roundtrip(msg: &SubscribeMessage) {
         let mut buf = Vec::new();

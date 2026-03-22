@@ -41,13 +41,13 @@ use anyhow::Result;
 use quinn::Endpoint;
 use tokio::sync::Mutex;
 
-use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::message::request_error::{ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED};
-use moqt_core::message::subscribe_ok::SubscribeOkMessage;
-use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
 use moqt_core::session::subgroup::SubgroupReader;
 use moqt_core::session::subscribe_request::SubscribeRequest;
+use moqt_core::session::{MoqtSession, SessionEvent};
+use moqt_core::wire::parameter::{MessageParameter, SubscriptionFilter};
+use moqt_core::wire::request_error::{ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED};
+use moqt_core::wire::subscribe_ok::SubscribeOkMessage;
+use moqt_core::wire::track_namespace::TrackNamespace;
 
 /// Unique identifier for a session. Assigned sequentially per connection.
 type SessionId = u64;

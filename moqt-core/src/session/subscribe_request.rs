@@ -6,12 +6,12 @@
 
 use anyhow::Result;
 
-use crate::message::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
-use crate::message::request_error::RequestErrorMessage;
-use crate::message::subscribe::SubscribeMessage;
-use crate::message::subscribe_ok::SubscribeOkMessage;
-use crate::primitives::reason_phrase::ReasonPhrase;
 use crate::stream::request::RequestStreamWriter;
+use crate::wire::publish_done::{PublishDoneMessage, STATUS_TRACK_ENDED};
+use crate::wire::reason_phrase::ReasonPhrase;
+use crate::wire::request_error::RequestErrorMessage;
+use crate::wire::subscribe::SubscribeMessage;
+use crate::wire::subscribe_ok::SubscribeOkMessage;
 
 /// An incoming SUBSCRIBE request that has not yet been responded to.
 pub struct SubscribeRequest {

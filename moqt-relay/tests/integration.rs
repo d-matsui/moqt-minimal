@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Once;
 
 use moqt_core::client::{self, TlsConfig};
-use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::primitives::track_namespace::TrackNamespace;
 use moqt_core::quic_config;
-use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
+use moqt_core::session::{MoqtSession, SessionEvent};
+use moqt_core::wire::parameter::{MessageParameter, SubscriptionFilter};
+use moqt_core::wire::track_namespace::TrackNamespace;
 
 static INIT: Once = Once::new();
 

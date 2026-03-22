@@ -6,12 +6,6 @@
 use anyhow::{Result, bail};
 use quinn::Connection;
 
-use crate::data::subgroup_header::SubgroupHeader;
-use crate::message::parameter::MessageParameter;
-use crate::message::publish_namespace::PublishNamespaceMessage;
-use crate::message::setup::{SetupMessage, SetupOption};
-use crate::message::subscribe::SubscribeMessage;
-use crate::primitives::track_namespace::TrackNamespace;
 use crate::session::publish_namespace_request::PublishNamespaceRequest;
 use crate::session::request_id::RequestIdAllocator;
 use crate::session::subgroup::{SubgroupReader, SubgroupWriter};
@@ -20,6 +14,12 @@ use crate::session::subscription::Subscription;
 use crate::stream::control::{ControlStreamReader, ControlStreamWriter};
 use crate::stream::data::{DataStreamReader, DataStreamWriter};
 use crate::stream::request::{RequestMessage, RequestStreamReader, RequestStreamWriter};
+use crate::wire::parameter::MessageParameter;
+use crate::wire::publish_namespace::PublishNamespaceMessage;
+use crate::wire::setup::{SetupMessage, SetupOption};
+use crate::wire::subgroup_header::SubgroupHeader;
+use crate::wire::subscribe::SubscribeMessage;
+use crate::wire::track_namespace::TrackNamespace;
 
 /// An event received on the session.
 pub enum SessionEvent {

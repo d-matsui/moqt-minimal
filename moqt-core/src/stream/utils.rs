@@ -8,7 +8,7 @@
 use anyhow::Result;
 use quinn::RecvStream;
 
-use crate::primitives::varint::{decode_varint, varint_byte_length};
+use crate::wire::varint::{decode_varint, varint_byte_length};
 
 /// Read a single varint from a QUIC stream.
 /// Returns (decoded value, raw bytes).

@@ -15,8 +15,8 @@ pub const ERROR_DOES_NOT_EXIST: u64 = 0x10;
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_ERROR, decode_message, encode_message};
-use crate::primitives::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// REQUEST_ERROR message. Indicates that a request has failed.
 ///

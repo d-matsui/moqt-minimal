@@ -27,7 +27,7 @@
 
 use anyhow::{Result, bail, ensure};
 
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 // Parameter Type IDs (defined in the spec)
 pub const PARAM_DELIVERY_TIMEOUT: u64 = 0x02;

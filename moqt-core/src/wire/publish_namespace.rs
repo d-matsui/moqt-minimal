@@ -11,11 +11,11 @@
 use anyhow::{Result, ensure};
 
 use super::{MSG_PUBLISH_NAMESPACE, decode_message, encode_message};
-use crate::message::parameter::{decode_parameters, encode_parameters};
-use crate::primitives::track_namespace::{
+use crate::wire::parameter::{decode_parameters, encode_parameters};
+use crate::wire::track_namespace::{
     TrackNamespace, decode_track_namespace, encode_track_namespace,
 };
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// PUBLISH_NAMESPACE message. Registers a namespace that the publisher will publish to.
 ///
@@ -109,7 +109,7 @@ mod tests {
     fn decode_with_skipped_parameters() {
         // A PUBLISH_NAMESPACE with an AUTHORIZATION_TOKEN parameter.
         // decode_parameters skips unknown-to-us params, so decode should succeed.
-        use crate::primitives::varint::encode_varint;
+        use crate::wire::varint::encode_varint;
         let mut payload = Vec::new();
         encode_varint(0, &mut payload); // request_id
         encode_varint(0, &mut payload); // required_request_id_delta

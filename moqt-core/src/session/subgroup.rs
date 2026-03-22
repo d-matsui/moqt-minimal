@@ -11,9 +11,9 @@
 
 use anyhow::Result;
 
-use crate::data::object::ObjectHeader;
-use crate::data::subgroup_header::SubgroupHeader;
 use crate::stream::data::{DataStreamReader, DataStreamWriter};
+use crate::wire::object::ObjectHeader;
+use crate::wire::subgroup_header::SubgroupHeader;
 
 /// Writes objects to a subgroup (unidirectional data stream).
 ///

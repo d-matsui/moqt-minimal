@@ -5,7 +5,7 @@
 use anyhow::{Result, ensure};
 
 use super::{MSG_REQUEST_OK, decode_message, encode_message};
-use crate::message::parameter::{decode_parameters, encode_parameters};
+use crate::wire::parameter::{decode_parameters, encode_parameters};
 
 /// REQUEST_OK message. Indicates that a request was successful.
 ///
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn decode_with_parameters() {
-        use crate::primitives::varint::encode_varint;
+        use crate::wire::varint::encode_varint;
         // A REQUEST_OK with a LARGEST_OBJECT parameter.
         // decode_parameters reads it into the result; decode should succeed.
         let mut payload = Vec::new();

@@ -12,17 +12,17 @@
 use anyhow::{Result, bail};
 use quinn::{RecvStream, SendStream};
 
-use crate::message::publish_done::PublishDoneMessage;
-use crate::message::publish_namespace::PublishNamespaceMessage;
-use crate::message::request_error::RequestErrorMessage;
-use crate::message::request_ok::RequestOkMessage;
-use crate::message::subscribe::SubscribeMessage;
-use crate::message::subscribe_ok::SubscribeOkMessage;
-use crate::message::{
+use crate::wire::publish_done::PublishDoneMessage;
+use crate::wire::publish_namespace::PublishNamespaceMessage;
+use crate::wire::request_error::RequestErrorMessage;
+use crate::wire::request_ok::RequestOkMessage;
+use crate::wire::subscribe::SubscribeMessage;
+use crate::wire::subscribe_ok::SubscribeOkMessage;
+use crate::wire::varint::decode_varint;
+use crate::wire::{
     MSG_PUBLISH_DONE, MSG_PUBLISH_NAMESPACE, MSG_REQUEST_ERROR, MSG_REQUEST_OK, MSG_SUBSCRIBE,
     MSG_SUBSCRIBE_OK,
 };
-use crate::primitives::varint::decode_varint;
 
 /// A typed message read from or written to a request stream.
 pub enum RequestMessage {
@@ -81,7 +81,7 @@ impl RequestStreamReader {
 
     /// Read one message frame (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::stream::utils::read_message_frame(&mut self.stream).await
+        crate::stream::read_message_frame(&mut self.stream).await
     }
 }
 
@@ -147,9 +147,9 @@ impl RequestStreamWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::parameter::{MessageParameter, SubscriptionFilter};
-    use crate::primitives::reason_phrase::ReasonPhrase;
-    use crate::primitives::track_namespace::TrackNamespace;
+    use crate::wire::parameter::{MessageParameter, SubscriptionFilter};
+    use crate::wire::reason_phrase::ReasonPhrase;
+    use crate::wire::track_namespace::TrackNamespace;
 
     /// Helper: encode a message and parse it back via parse_request_message.
     fn roundtrip_parse<F>(encode: F) -> RequestMessage
@@ -249,7 +249,7 @@ mod tests {
     fn parse_unknown_type_is_error() {
         // Encode a fake message with type 0xFF
         let mut buf = Vec::new();
-        crate::primitives::varint::encode_varint(0xFF, &mut buf);
+        crate::wire::varint::encode_varint(0xFF, &mut buf);
         buf.extend_from_slice(&0u16.to_be_bytes());
         assert!(parse_request_message(&buf).is_err());
     }

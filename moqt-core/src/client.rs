@@ -10,7 +10,7 @@ use anyhow::Result;
 use rustls_pki_types::CertificateDer;
 
 use crate::quic_config;
-use crate::session::moqt_session::MoqtSession;
+use crate::session::MoqtSession;
 
 /// TLS configuration for the client connection.
 pub enum TlsConfig {

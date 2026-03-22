@@ -23,7 +23,7 @@ impl ControlStreamWriter {
 
     /// Write a SETUP message to the control stream.
     /// Delegates encoding to `SetupMessage::encode`.
-    pub async fn write_setup(&mut self, msg: &crate::message::setup::SetupMessage) -> Result<()> {
+    pub async fn write_setup(&mut self, msg: &crate::wire::setup::SetupMessage) -> Result<()> {
         let mut buf = Vec::new();
         msg.encode(&mut buf)?;
         self.stream.write_all(&buf).await?;
@@ -49,15 +49,15 @@ impl ControlStreamReader {
 
     /// Read a SETUP message from the control stream.
     /// Expects stream type (0x2F00) followed by the SETUP message bytes.
-    pub async fn read_setup(&mut self) -> Result<crate::message::setup::SetupMessage> {
+    pub async fn read_setup(&mut self) -> Result<crate::wire::setup::SetupMessage> {
         let buf = self.read_message_bytes().await?;
         let mut slice = buf.as_slice();
-        crate::message::setup::SetupMessage::decode(&mut slice)
+        crate::wire::setup::SetupMessage::decode(&mut slice)
     }
 
     /// Read one control message from the stream, returning the full frame
     /// (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::stream::utils::read_message_frame(&mut self.stream).await
+        crate::stream::read_message_frame(&mut self.stream).await
     }
 }

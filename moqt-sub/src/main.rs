@@ -18,9 +18,9 @@ use std::io::Write;
 use std::net::SocketAddr;
 
 use moqt_core::client::{self, TlsConfig};
-use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
-use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::moqt_session::SessionEvent;
+use moqt_core::session::SessionEvent;
+use moqt_core::wire::parameter::{MessageParameter, SubscriptionFilter};
+use moqt_core::wire::track_namespace::TrackNamespace;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

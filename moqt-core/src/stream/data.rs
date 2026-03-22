@@ -11,9 +11,9 @@
 use anyhow::Result;
 use quinn::{RecvStream, SendStream};
 
-use crate::data::object::ObjectHeader;
-use crate::data::subgroup_header::SubgroupHeader;
-use crate::stream::utils::read_varint;
+use crate::stream::read_varint;
+use crate::wire::object::ObjectHeader;
+use crate::wire::subgroup_header::SubgroupHeader;
 
 /// Reads SubgroupHeader and Objects from a QUIC unidirectional data stream.
 pub struct DataStreamReader {

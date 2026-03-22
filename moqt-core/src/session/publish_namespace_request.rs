@@ -5,10 +5,10 @@
 
 use anyhow::Result;
 
-use crate::message::publish_namespace::PublishNamespaceMessage;
-use crate::message::request_error::RequestErrorMessage;
-use crate::message::request_ok::RequestOkMessage;
 use crate::stream::request::RequestStreamWriter;
+use crate::wire::publish_namespace::PublishNamespaceMessage;
+use crate::wire::request_error::RequestErrorMessage;
+use crate::wire::request_ok::RequestOkMessage;
 
 /// An incoming PUBLISH_NAMESPACE request that has not yet been responded to.
 pub struct PublishNamespaceRequest {

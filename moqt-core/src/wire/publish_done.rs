@@ -16,8 +16,8 @@ pub const STATUS_SUBSCRIPTION_ENDED: u64 = 0x3;
 use anyhow::{Result, ensure};
 
 use super::{MSG_PUBLISH_DONE, decode_message, encode_message};
-use crate::primitives::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::reason_phrase::{ReasonPhrase, decode_reason_phrase, encode_reason_phrase};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// PUBLISH_DONE message. Notifies the end of publishing.
 ///

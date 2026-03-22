@@ -34,7 +34,7 @@
 
 use anyhow::{Result, ensure};
 
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// Subgroup header. Written at the beginning of a QUIC unidirectional stream.
 ///

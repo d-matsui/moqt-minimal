@@ -13,7 +13,7 @@
 
 use anyhow::{Result, ensure};
 
-use crate::primitives::varint::{decode_varint, encode_varint};
+use crate::wire::varint::{decode_varint, encode_varint};
 
 /// Object header. Written before each object payload.
 ///
