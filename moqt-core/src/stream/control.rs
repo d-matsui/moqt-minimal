@@ -1,6 +1,6 @@
 //! # control: MOQT control stream reader/writer
 //!
-//! In MOQT, each peer opens one unidirectional QUIC stream for control messages.
+//! In MOQT, each peer opens one unidirectional stream for control messages.
 //! The first message on a control stream is always SETUP.
 //! A control stream MUST NOT be closed during the session lifetime.
 //!
@@ -8,16 +8,16 @@
 
 use anyhow::Result;
 
-use quinn::{RecvStream, SendStream};
+use crate::transport;
 
 /// Write side of a MOQT control stream.
-/// Corresponds to the QUIC unidirectional stream each peer opens.
+/// Corresponds to the unidirectional stream each peer opens.
 pub struct ControlStreamWriter {
-    stream: SendStream,
+    stream: Box<dyn transport::SendStream>,
 }
 
 impl ControlStreamWriter {
-    pub fn new(stream: SendStream) -> Self {
+    pub fn new(stream: Box<dyn transport::SendStream>) -> Self {
         Self { stream }
     }
 
@@ -39,11 +39,11 @@ impl ControlStreamWriter {
 
 /// Read side of a MOQT control stream.
 pub struct ControlStreamReader {
-    stream: RecvStream,
+    stream: Box<dyn transport::RecvStream>,
 }
 
 impl ControlStreamReader {
-    pub fn new(stream: RecvStream) -> Self {
+    pub fn new(stream: Box<dyn transport::RecvStream>) -> Self {
         Self { stream }
     }
 
@@ -58,6 +58,6 @@ impl ControlStreamReader {
     /// Read one control message from the stream, returning the full frame
     /// (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::stream::read_message_frame(&mut self.stream).await
+        crate::stream::read_message_frame(self.stream.as_mut()).await
     }
 }

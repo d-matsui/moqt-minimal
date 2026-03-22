@@ -19,7 +19,6 @@ pub mod subscription;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Result, bail};
-use quinn::Connection;
 
 use crate::session::publish_namespace_request::PublishNamespaceRequest;
 use crate::session::subgroup::{SubgroupReader, SubgroupWriter};
@@ -28,6 +27,7 @@ use crate::session::subscription::Subscription;
 use crate::stream::control::{ControlStreamReader, ControlStreamWriter};
 use crate::stream::data::{DataStreamReader, DataStreamWriter};
 use crate::stream::request::{RequestMessage, RequestStreamReader, RequestStreamWriter};
+use crate::transport;
 use crate::wire::parameter::MessageParameter;
 use crate::wire::publish_namespace::PublishNamespaceMessage;
 use crate::wire::setup::{SetupMessage, SetupOption};
@@ -91,7 +91,7 @@ pub enum SessionEvent {
 /// Holds the two control streams (one per peer) for the session lifetime.
 /// Dropping the writer would send FIN, which is a protocol violation (Section 3.3).
 pub struct MoqtSession {
-    connection: Connection,
+    connection: Box<dyn transport::Connection>,
     request_id_alloc: RequestIdAllocator,
     /// Writer for this peer's control stream (must not be dropped).
     _ctrl_writer: ControlStreamWriter,
@@ -100,9 +100,10 @@ pub struct MoqtSession {
 }
 
 impl MoqtSession {
-    /// Establish a client-side MOQT session.
-    /// Sends SETUP with Path and Authority options, then receives the server's SETUP.
-    pub async fn connect(connection: Connection) -> Result<Self> {
+    /// Create a MOQT session from a transport connection.
+    /// Performs the SETUP exchange (client side: sends Path + Authority options).
+    pub async fn connect(connection: impl transport::Connection + 'static) -> Result<Self> {
+        let connection: Box<dyn transport::Connection> = Box::new(connection);
         let ctrl_send = connection.open_uni().await?;
         let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
         let setup = SetupMessage {
@@ -125,9 +126,10 @@ impl MoqtSession {
         })
     }
 
-    /// Establish a server-side MOQT session.
-    /// Sends an empty SETUP, then receives the client's SETUP.
-    pub async fn accept(connection: Connection) -> Result<Self> {
+    /// Accept a MOQT session from a transport connection.
+    /// Performs the SETUP exchange (server side: sends empty SETUP).
+    pub async fn accept(connection: impl transport::Connection + 'static) -> Result<Self> {
+        let connection: Box<dyn transport::Connection> = Box::new(connection);
         let ctrl_send = connection.open_uni().await?;
         let mut ctrl_writer = ControlStreamWriter::new(ctrl_send);
         let setup = SetupMessage {
@@ -274,14 +276,9 @@ impl MoqtSession {
         Ok(writer)
     }
 
-    /// Close the session (send QUIC CONNECTION_CLOSE).
+    /// Close the session.
     pub fn close(&self) {
-        self.connection.close(0u32.into(), b"done");
-    }
-
-    /// Get a reference to the underlying QUIC connection.
-    pub fn connection(&self) -> &Connection {
-        &self.connection
+        self.connection.close(0u32, b"done");
     }
 }
 

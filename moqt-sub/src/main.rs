@@ -75,11 +75,13 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Clone connection for closing later (session is moved into the receive task)
-    let connection = session.connection().clone();
+    // Wrap session in Arc so it can be shared with the receive task
+    let session = std::sync::Arc::new(session);
+    let session_recv = session.clone();
 
     // Receive Object streams
     let receive_handle = tokio::spawn(async move {
+        let session = session_recv;
         let stdout = std::io::stdout();
         let mut ivf_header_written = false;
         let mut frame_index: u64 = 0;
@@ -143,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    connection.close(0u32.into(), b"done");
+    session.close();
     let _ = receive_handle.await;
 
     if !pipe_mode {

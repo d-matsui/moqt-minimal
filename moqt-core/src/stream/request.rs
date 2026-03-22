@@ -10,7 +10,8 @@
 //! for the entire session.
 
 use anyhow::{Result, bail};
-use quinn::{RecvStream, SendStream};
+
+use crate::transport;
 
 use crate::wire::publish_done::PublishDoneMessage;
 use crate::wire::publish_namespace::PublishNamespaceMessage;
@@ -65,11 +66,11 @@ pub fn parse_request_message(bytes: &[u8]) -> Result<RequestMessage> {
 
 /// Read side of a MOQT request stream (bidirectional).
 pub struct RequestStreamReader {
-    stream: RecvStream,
+    stream: Box<dyn transport::RecvStream>,
 }
 
 impl RequestStreamReader {
-    pub fn new(stream: RecvStream) -> Self {
+    pub fn new(stream: Box<dyn transport::RecvStream>) -> Self {
         Self { stream }
     }
 
@@ -81,17 +82,17 @@ impl RequestStreamReader {
 
     /// Read one message frame (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::stream::read_message_frame(&mut self.stream).await
+        crate::stream::read_message_frame(self.stream.as_mut()).await
     }
 }
 
 /// Write side of a MOQT request stream (bidirectional).
 pub struct RequestStreamWriter {
-    stream: SendStream,
+    stream: Box<dyn transport::SendStream>,
 }
 
 impl RequestStreamWriter {
-    pub fn new(stream: SendStream) -> Self {
+    pub fn new(stream: Box<dyn transport::SendStream>) -> Self {
         Self { stream }
     }
 

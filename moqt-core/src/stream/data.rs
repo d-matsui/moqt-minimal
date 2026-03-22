@@ -1,7 +1,7 @@
 //! # data: MOQT data stream reader/writer
 //!
 //! Provides `DataStreamReader` and `DataStreamWriter` for reading and writing
-//! SubgroupHeader + Object sequences on QUIC unidirectional streams.
+//! SubgroupHeader + Object sequences on unidirectional streams.
 //!
 //! This mirrors the `ControlStreamReader` / `ControlStreamWriter` pattern
 //! used for control messages, ensuring that wire format knowledge lives in
@@ -9,20 +9,20 @@
 //! being duplicated in each binary.
 
 use anyhow::Result;
-use quinn::{RecvStream, SendStream};
 
 use crate::stream::read_varint;
+use crate::transport;
 use crate::wire::object::ObjectHeader;
 use crate::wire::subgroup_header::SubgroupHeader;
 
-/// Reads SubgroupHeader and Objects from a QUIC unidirectional data stream.
+/// Reads SubgroupHeader and Objects from a unidirectional data stream.
 pub struct DataStreamReader {
-    stream: RecvStream,
+    stream: Box<dyn transport::RecvStream>,
     has_properties: bool,
 }
 
 impl DataStreamReader {
-    pub fn new(stream: RecvStream) -> Self {
+    pub fn new(stream: Box<dyn transport::RecvStream>) -> Self {
         Self {
             stream,
             has_properties: false,
@@ -42,21 +42,21 @@ impl DataStreamReader {
         let mut raw = Vec::new();
 
         // stream_type varint
-        let (stream_type, type_bytes) = read_varint(&mut self.stream).await?;
+        let (stream_type, type_bytes) = read_varint(self.stream.as_mut()).await?;
         raw.extend_from_slice(&type_bytes);
 
         // track_alias varint
-        let (_track_alias, alias_bytes) = read_varint(&mut self.stream).await?;
+        let (_track_alias, alias_bytes) = read_varint(self.stream.as_mut()).await?;
         raw.extend_from_slice(&alias_bytes);
 
         // group_id varint
-        let (_group_id, group_bytes) = read_varint(&mut self.stream).await?;
+        let (_group_id, group_bytes) = read_varint(self.stream.as_mut()).await?;
         raw.extend_from_slice(&group_bytes);
 
         // Optional Subgroup ID (SUBGROUP_ID_MODE bits 1-2 == 0b10)
         let subgroup_id_mode = (stream_type >> 1) & 0x03;
         if subgroup_id_mode == 0x02 {
-            let (_subgroup_id, subgroup_bytes) = read_varint(&mut self.stream).await?;
+            let (_subgroup_id, subgroup_bytes) = read_varint(self.stream.as_mut()).await?;
             raw.extend_from_slice(&subgroup_bytes);
         }
 
@@ -85,12 +85,13 @@ impl DataStreamReader {
         let mut header_bytes = Vec::new();
 
         // Read object_id_delta; EOF means end of stream
-        let (object_id_delta, delta_bytes) = match read_varint(&mut self.stream).await {
+        let (object_id_delta, delta_bytes) = match read_varint(self.stream.as_mut()).await {
             Ok(v) => v,
             Err(e) => {
-                let is_eof = e.downcast_ref::<quinn::ReadExactError>().is_some()
-                    || e.to_string().contains("stream ended");
-                if is_eof {
+                // Transport implementations convert EOF to io::ErrorKind::UnexpectedEof
+                if let Some(io_err) = e.downcast_ref::<std::io::Error>()
+                    && io_err.kind() == std::io::ErrorKind::UnexpectedEof
+                {
                     return Ok(None);
                 }
                 return Err(e);
@@ -99,12 +100,12 @@ impl DataStreamReader {
         header_bytes.extend_from_slice(&delta_bytes);
 
         // Read payload_length
-        let (payload_length, len_bytes) = read_varint(&mut self.stream).await?;
+        let (payload_length, len_bytes) = read_varint(self.stream.as_mut()).await?;
         header_bytes.extend_from_slice(&len_bytes);
 
         // Skip Object Properties if PROPERTIES bit was set in SubgroupHeader
         if self.has_properties {
-            let (props_len, props_len_bytes) = read_varint(&mut self.stream).await?;
+            let (props_len, props_len_bytes) = read_varint(self.stream.as_mut()).await?;
             header_bytes.extend_from_slice(&props_len_bytes);
             if props_len > 0 {
                 let mut props = vec![0u8; props_len as usize];
@@ -128,13 +129,13 @@ impl DataStreamReader {
     }
 }
 
-/// Writes SubgroupHeader and Objects to a QUIC unidirectional data stream.
+/// Writes SubgroupHeader and Objects to a unidirectional data stream.
 pub struct DataStreamWriter {
-    stream: SendStream,
+    stream: Box<dyn transport::SendStream>,
 }
 
 impl DataStreamWriter {
-    pub fn new(stream: SendStream) -> Self {
+    pub fn new(stream: Box<dyn transport::SendStream>) -> Self {
         Self { stream }
     }
 

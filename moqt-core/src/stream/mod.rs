@@ -1,8 +1,9 @@
-//! # stream: QUIC stream framing for MOQT
+//! # stream: MOQT stream framing
 //!
-//! Reader/writer wrappers for the three MOQT stream types over QUIC.
-//! These handle framing (reading/writing bytes on a QUIC stream) but have
+//! Reader/writer wrappers for the three MOQT stream types.
+//! These handle framing (reading/writing bytes on a stream) but have
 //! no knowledge of session state or protocol logic.
+//! Transport-agnostic: operates on `transport::RecvStream` / `transport::SendStream`.
 //!
 //! - `control`: Control stream (unidirectional) — SETUP / GOAWAY
 //! - `request`: Request stream (bidirectional) — SUBSCRIBE, PUBLISH_NAMESPACE, etc.
@@ -13,16 +14,16 @@ pub mod data;
 pub mod request;
 
 use anyhow::Result;
-use quinn::RecvStream;
 
+use crate::transport;
 use crate::wire::varint::{decode_varint, varint_byte_length};
 
-/// Read a single varint from a QUIC stream.
+/// Read a single varint from a stream.
 /// Returns (decoded value, raw bytes).
 ///
-/// Since QUIC streams deliver data incrementally, this reads the first byte
+/// Streams deliver data incrementally, so this reads the first byte
 /// to determine the varint length, then reads the remaining bytes.
-pub async fn read_varint(stream: &mut RecvStream) -> Result<(u64, Vec<u8>)> {
+pub async fn read_varint(stream: &mut dyn transport::RecvStream) -> Result<(u64, Vec<u8>)> {
     // Read the first byte to determine total length
     let mut first = [0u8; 1];
     stream.read_exact(&mut first).await?;
@@ -42,14 +43,14 @@ pub async fn read_varint(stream: &mut RecvStream) -> Result<(u64, Vec<u8>)> {
     Ok((value, raw))
 }
 
-/// Read one message frame (Type + Length + Payload) from a QUIC stream.
+/// Read one message frame (Type + Length + Payload) from a stream.
 /// Returns the concatenated raw bytes.
 ///
 /// Frame format:
 /// 1. Message type (varint)
 /// 2. Payload length (2-byte big-endian u16)
 /// 3. Payload bytes
-pub async fn read_message_frame(stream: &mut RecvStream) -> Result<Vec<u8>> {
+pub async fn read_message_frame(stream: &mut dyn transport::RecvStream) -> Result<Vec<u8>> {
     // Read message type (varint)
     let (_type_val, type_bytes) = read_varint(stream).await?;
 
