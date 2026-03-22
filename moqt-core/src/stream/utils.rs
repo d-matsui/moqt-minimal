@@ -1,4 +1,4 @@
-//! # stream_utils: Shared utilities for reading from QUIC streams
+//! # utils: Shared utilities for reading from QUIC streams
 //!
 //! Provides low-level readers that work with any `quinn::RecvStream`:
 //! - `read_varint`: Read a single varint incrementally (used by all stream types)

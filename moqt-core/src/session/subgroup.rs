@@ -1,30 +1,30 @@
-//! # group: High-level Group reader/writer
+//! # subgroup: High-level Subgroup reader/writer
 //!
 //! Wraps `DataStreamWriter` / `DataStreamReader` to hide wire-level details
 //! (`ObjectHeader`, `SubgroupHeader` fields) from application code.
 //!
-//! - `GroupWriter`: send objects by payload only (ObjectHeader auto-generated)
-//! - `GroupReader`: receive objects as payloads, with group metadata accessors
+//! - `SubgroupWriter`: send objects by payload only (ObjectHeader auto-generated)
+//! - `SubgroupReader`: receive objects as payloads, with subgroup metadata accessors
 //!
-//! For low-level access (e.g. relay pass-through), `GroupReader` also exposes
+//! For low-level access (e.g. relay pass-through), `SubgroupReader` also exposes
 //! `header()` and `read_object_raw()`.
 
 use anyhow::Result;
 
 use crate::data::object::ObjectHeader;
 use crate::data::subgroup_header::SubgroupHeader;
-use crate::session::data_stream::{DataStreamReader, DataStreamWriter};
+use crate::stream::data::{DataStreamReader, DataStreamWriter};
 
-/// Writes objects to a group (unidirectional data stream).
+/// Writes objects to a subgroup (unidirectional data stream).
 ///
 /// Hides `ObjectHeader` construction — callers pass only the payload.
 /// The stream is automatically finished (FIN sent) when dropped.
-pub struct GroupWriter {
+pub struct SubgroupWriter {
     writer: DataStreamWriter,
     finished: bool,
 }
 
-impl GroupWriter {
+impl SubgroupWriter {
     pub(crate) fn new(writer: DataStreamWriter) -> Self {
         Self {
             writer,
@@ -32,7 +32,7 @@ impl GroupWriter {
         }
     }
 
-    /// Write an object payload to this group.
+    /// Write an object payload to this subgroup.
     /// `ObjectHeader` is generated internally (object_id_delta=0, payload_length from payload).
     pub async fn write_object(&mut self, payload: &[u8]) -> Result<()> {
         let header = ObjectHeader {
@@ -53,7 +53,7 @@ impl GroupWriter {
     }
 }
 
-impl Drop for GroupWriter {
+impl Drop for SubgroupWriter {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.writer.finish();
@@ -61,16 +61,16 @@ impl Drop for GroupWriter {
     }
 }
 
-/// Reads objects from a group (unidirectional data stream).
+/// Reads objects from a subgroup (unidirectional data stream).
 ///
 /// Provides high-level access (payload only) for clients,
 /// and low-level access (raw bytes) for relay pass-through.
-pub struct GroupReader {
+pub struct SubgroupReader {
     header: SubgroupHeader,
     reader: DataStreamReader,
 }
 
-impl GroupReader {
+impl SubgroupReader {
     pub(crate) fn new(header: SubgroupHeader, reader: DataStreamReader) -> Self {
         Self { header, reader }
     }

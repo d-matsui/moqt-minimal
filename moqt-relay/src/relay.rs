@@ -45,8 +45,8 @@ use moqt_core::message::parameter::{MessageParameter, SubscriptionFilter};
 use moqt_core::message::request_error::{ERROR_DOES_NOT_EXIST, ERROR_NOT_SUPPORTED};
 use moqt_core::message::subscribe_ok::SubscribeOkMessage;
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::group::GroupReader;
 use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
+use moqt_core::session::subgroup::SubgroupReader;
 use moqt_core::session::subscribe_request::SubscribeRequest;
 
 /// Unique identifier for a session. Assigned sequentially per connection.
@@ -262,9 +262,9 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
                     }
                 });
             }
-            SessionEvent::DataStream(group_reader) => {
+            SessionEvent::DataStream(subgroup_reader) => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_data_stream(session_id, group_reader, state).await {
+                    if let Err(e) = handle_data_stream(session_id, subgroup_reader, state).await {
                         eprintln!("data stream error: {e}");
                     }
                 });
@@ -289,10 +289,10 @@ async fn handle_connection(incoming: quinn::Incoming, state: Arc<Mutex<RelayStat
 /// 5. Propagate stream termination (FIN) to subscribers
 async fn handle_data_stream(
     sender_session: SessionId,
-    mut group_reader: GroupReader,
+    mut subgroup_reader: SubgroupReader,
     state: Arc<Mutex<RelayState>>,
 ) -> Result<()> {
-    let track_alias = group_reader.track_alias();
+    let track_alias = subgroup_reader.track_alias();
 
     // === Identify subscribers and open downstream streams ===
     // Find matching subscriptions by Track Alias and sender session,
@@ -304,14 +304,14 @@ async fn handle_data_stream(
 
     // If there are no subscribers, drain the stream
     if sub_sessions.is_empty() {
-        while let Ok(Some(_)) = group_reader.read_object_raw().await {}
+        while let Ok(Some(_)) = subgroup_reader.read_object_raw().await {}
         return Ok(());
     }
 
     // === Open data streams to subscribers (writes SubgroupHeader) ===
     let mut writers = Vec::new();
     for session in &sub_sessions {
-        match session.open_data_stream(group_reader.header()).await {
+        match session.open_data_stream(subgroup_reader.header()).await {
             Ok(w) => writers.push(Arc::new(Mutex::new(w))),
             Err(e) => eprintln!("failed to open data stream to subscriber: {e}"),
         }
@@ -321,7 +321,7 @@ async fn handle_data_stream(
     // === Relay objects incrementally ===
     // Read objects one by one and immediately forward to all subscribers.
     // No buffering, so memory usage stays low even for large streams.
-    while let Some((_obj, payload, obj_header_bytes)) = group_reader.read_object_raw().await? {
+    while let Some((_obj, payload, obj_header_bytes)) = subgroup_reader.read_object_raw().await? {
         // Forward immediately to all subscribers
         // Continue forwarding to other subscribers even if an error occurs
         for writer in &subscriber_writers {

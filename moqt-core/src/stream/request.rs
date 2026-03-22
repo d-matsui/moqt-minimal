@@ -1,4 +1,4 @@
-//! # request_stream: MOQT request stream reader/writer
+//! # request: MOQT request stream reader/writer
 //!
 //! In MOQT, each request (SUBSCRIBE, PUBLISH_NAMESPACE, etc.) is carried on
 //! a dedicated bidirectional QUIC stream. This module provides reader/writer
@@ -81,7 +81,7 @@ impl RequestStreamReader {
 
     /// Read one message frame (Type + Length + Payload) as raw bytes.
     pub async fn read_message_bytes(&mut self) -> Result<Vec<u8>> {
-        crate::session::stream_utils::read_message_frame(&mut self.stream).await
+        crate::stream::utils::read_message_frame(&mut self.stream).await
     }
 }
 

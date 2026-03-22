@@ -29,8 +29,8 @@ use std::time::Duration;
 
 use moqt_core::client::{self, TlsConfig};
 use moqt_core::primitives::track_namespace::TrackNamespace;
-use moqt_core::session::group::GroupWriter;
 use moqt_core::session::moqt_session::{MoqtSession, SessionEvent};
+use moqt_core::session::subgroup::SubgroupWriter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         // === Demo mode: send dummy data ===
         for group_id in 0u64..5 {
-            let mut group = session.open_group(1, group_id).await?;
+            let mut group = session.open_subgroup(1, group_id, 0).await?;
 
             for obj_id in 0u64..3 {
                 let payload = format!("g{group_id}o{obj_id}");
@@ -192,7 +192,7 @@ async fn send_from_stdin(session: &MoqtSession, _track_name: &str) -> anyhow::Re
 
     let mut group_id: u64 = 0;
     let mut object_id: u64 = 0;
-    let mut current_group: Option<GroupWriter> = None;
+    let mut current_group: Option<SubgroupWriter> = None;
     let mut stream_count: u64 = 0;
     let mut group_started = false;
 
@@ -210,7 +210,7 @@ async fn send_from_stdin(session: &MoqtSession, _track_name: &str) -> anyhow::Re
 
         // Open a new group if needed
         if current_group.is_none() {
-            current_group = Some(session.open_group(1, group_id).await?);
+            current_group = Some(session.open_subgroup(1, group_id, 0).await?);
             group_started = true;
         }
 

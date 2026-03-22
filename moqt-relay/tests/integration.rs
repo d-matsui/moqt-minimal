@@ -177,7 +177,7 @@ async fn object_forwarding() {
                 req.accept(1).await.unwrap();
 
                 // Send a subgroup with 2 objects
-                let mut group = pub_session.open_group(1, 0).await.unwrap();
+                let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
                 group.write_object(b"hello").await.unwrap();
                 group.write_object(b"world").await.unwrap();
             }
@@ -242,7 +242,7 @@ async fn publish_done_forwarding() {
                 req.accept(1).await.unwrap();
 
                 // Send one object
-                let mut group = pub_session.open_group(1, 0).await.unwrap();
+                let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
                 group.write_object(b"done").await.unwrap();
                 group.finish().unwrap();
 
@@ -292,7 +292,7 @@ async fn multiple_groups() {
                 req.accept(1).await.unwrap();
 
                 for group_id in 0u64..3 {
-                    let mut group = pub_session.open_group(1, group_id).await.unwrap();
+                    let mut group = pub_session.open_subgroup(1, group_id, 0).await.unwrap();
                     for obj_id in 0u64..2 {
                         let payload = format!("g{group_id}o{obj_id}");
                         group.write_object(payload.as_bytes()).await.unwrap();
@@ -383,7 +383,7 @@ async fn late_join() {
 
                 // Send 2 groups after subscriber joins
                 for group_id in 0u64..2 {
-                    let mut group = pub_session.open_group(1, group_id).await.unwrap();
+                    let mut group = pub_session.open_subgroup(1, group_id, 0).await.unwrap();
                     let payload = format!("late-g{group_id}");
                     group.write_object(payload.as_bytes()).await.unwrap();
                 }
@@ -517,7 +517,7 @@ async fn multiple_subscribers() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Send 1 group with 1 object
-        let mut group = pub_session.open_group(1, 0).await.unwrap();
+        let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
         group.write_object(b"shared").await.unwrap();
         group.finish().unwrap();
 
@@ -599,11 +599,11 @@ async fn multiple_tracks() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Send video object
-        let mut group_v = pub_session.open_group(1, 0).await.unwrap();
+        let mut group_v = pub_session.open_subgroup(1, 0, 0).await.unwrap();
         group_v.write_object(b"video").await.unwrap();
 
         // Send audio object
-        let mut group_a = pub_session.open_group(2, 0).await.unwrap();
+        let mut group_a = pub_session.open_subgroup(2, 0, 0).await.unwrap();
         group_a.write_object(b"audio").await.unwrap();
 
         // PUBLISH_DONE on both
@@ -683,7 +683,7 @@ async fn subscription_aggregation() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Send 1 group with 1 object
-        let mut group = pub_session.open_group(1, 0).await.unwrap();
+        let mut group = pub_session.open_subgroup(1, 0, 0).await.unwrap();
         group.write_object(b"aggr").await.unwrap();
         group.finish().unwrap();
 
@@ -772,7 +772,7 @@ async fn subscriber_disconnect() {
 
                 // Send a few groups
                 for group_id in 0u64..3 {
-                    let mut group = pub_session.open_group(1, group_id).await.unwrap();
+                    let mut group = pub_session.open_subgroup(1, group_id, 0).await.unwrap();
                     group.write_object(b"data").await.unwrap();
                     group.finish().unwrap();
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

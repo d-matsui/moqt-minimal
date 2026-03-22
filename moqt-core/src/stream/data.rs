@@ -1,4 +1,4 @@
-//! # data_stream: MOQT data stream reader/writer
+//! # data: MOQT data stream reader/writer
 //!
 //! Provides `DataStreamReader` and `DataStreamWriter` for reading and writing
 //! SubgroupHeader + Object sequences on QUIC unidirectional streams.
@@ -13,7 +13,7 @@ use quinn::{RecvStream, SendStream};
 
 use crate::data::object::ObjectHeader;
 use crate::data::subgroup_header::SubgroupHeader;
-use crate::session::stream_utils::read_varint;
+use crate::stream::utils::read_varint;
 
 /// Reads SubgroupHeader and Objects from a QUIC unidirectional data stream.
 pub struct DataStreamReader {

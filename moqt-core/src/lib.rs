@@ -7,7 +7,8 @@
 //! - `primitives`: 可変長整数 (varint) やトラック名前空間など、プロトコルの基本型
 //! - `message`: SETUP, SUBSCRIBE, PUBLISH_NAMESPACE などの制御メッセージ
 //! - `data`: サブグループヘッダーやオブジェクトなど、メディアデータストリーム用の型
-//! - `session`: QUIC セッション管理（コントロールストリーム、リクエストID 割り当て、QUIC設定）
+//! - `stream`: QUIC ストリーム上のフレーミング（読み書き）
+//! - `session`: プロトコルロジックと高レベル API（SETUP ハンドシェイク、イベントディスパッチ）
 
 pub mod client;
 pub mod data;
@@ -15,3 +16,4 @@ pub mod message;
 pub mod primitives;
 pub mod quic_config;
 pub mod session;
+pub mod stream;

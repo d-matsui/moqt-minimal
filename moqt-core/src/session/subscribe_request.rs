@@ -11,7 +11,7 @@ use crate::message::request_error::RequestErrorMessage;
 use crate::message::subscribe::SubscribeMessage;
 use crate::message::subscribe_ok::SubscribeOkMessage;
 use crate::primitives::reason_phrase::ReasonPhrase;
-use crate::session::request_stream::RequestStreamWriter;
+use crate::stream::request::RequestStreamWriter;
 
 /// An incoming SUBSCRIBE request that has not yet been responded to.
 pub struct SubscribeRequest {
