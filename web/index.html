@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MOQT Web</title>
+  <style>
+    body { font-family: monospace; margin: 40px; background: #1a1a1a; color: #eee; }
+    a { color: #6cf; }
+    li { margin-bottom: 8px; }
+    code { background: #333; padding: 2px 6px; }
+  </style>
+</head>
+<body>
+  <h1>MOQT Web Client</h1>
+  <p>Browser-based MOQT publisher and subscriber over WebTransport.</p>
+  <ul>
+    <li><a href="/publisher.html">Publisher</a> — capture camera and publish via MOQT</li>
+    <li><a href="/subscriber.html">Subscriber</a> — receive and play MOQT video</li>
+  </ul>
+  <h3>Setup</h3>
+  <ol>
+    <li>Start the relay: <code>cargo run --bin moqt-relay</code></li>
+    <li>Start the web server: <code>cd web && npx vite</code></li>
+    <li>Open Chrome with: <code>chrome --origin-to-force-quic-on=localhost:4433 --ignore-certificate-errors-spdy-list=localhost</code></li>
+    <li>Open the Publisher page, click Start</li>
+    <li>Open the Subscriber page in another tab, click Start</li>
+  </ol>
+</body>
+</html>

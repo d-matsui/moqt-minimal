@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MOQT Publisher</title>
+  <style>
+    body { font-family: monospace; margin: 20px; background: #1a1a1a; color: #eee; }
+    .controls { margin-bottom: 16px; }
+    input { background: #333; color: #eee; border: 1px solid #555; padding: 4px 8px; margin-right: 8px; }
+    button { padding: 6px 16px; margin-right: 8px; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    video { background: #000; border: 1px solid #333; display: block; margin-bottom: 16px; }
+    #log { background: #111; padding: 12px; height: 200px; overflow-y: auto; white-space: pre; font-size: 12px; border: 1px solid #333; }
+  </style>
+</head>
+<body>
+  <h2>MOQT Publisher</h2>
+  <div class="controls">
+    <label>Relay: <input id="relay-url" value="https://localhost:4433"></label>
+    <label>Namespace: <input id="namespace" value="example"></label>
+    <label>Track: <input id="track-name" value="video"></label>
+  </div>
+  <div class="controls">
+    <button id="start-btn">Start</button>
+    <button id="stop-btn" disabled>Stop</button>
+  </div>
+  <video id="preview" autoplay muted playsinline width="640" height="480"></video>
+  <div id="log"></div>
+  <script type="module" src="/src/publisher.ts"></script>
+</body>
+</html>
